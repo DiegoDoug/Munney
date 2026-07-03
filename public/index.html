@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Munney</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>💵</text></svg>">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">💵 Mu<span>nn</span>ey</div>
+      <nav class="nav" id="nav">
+        <a href="#/" data-route="/">Dashboard</a>
+        <a href="#/budget" data-route="/budget">Budget</a>
+        <a href="#/transactions" data-route="/transactions">Transactions</a>
+        <a href="#/recurring" data-route="/recurring">Recurring</a>
+        <a href="#/reports" data-route="/reports">Reports</a>
+      </nav>
+      <div class="side-section">Accounts <button id="add-account" title="Add account">+</button></div>
+      <div id="account-list"></div>
+    </aside>
+    <main class="main" id="main"></main>
+  </div>
+  <div id="modal-root"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
