@@ -26,7 +26,7 @@ after(async () => {
 
 test('full flow: account -> transactions -> budget -> dashboard', async () => {
   await page.goto(base + '/#/');
-  await page.waitForSelector('.brand');
+  await page.waitForSelector('#nav');
 
   // --- create an account with an opening balance
   await page.click('#add-account');
@@ -85,7 +85,7 @@ test('full flow: account -> transactions -> budget -> dashboard', async () => {
   await page.goto(base + '/#/');
   await page.waitForSelector('.tile');
   const dash = await page.textContent('#main');
-  assert.match(dash, /NET WORTH/);
+  assert.match(dash, /net worth/i);
   assert.match(dash, /\$2,326\.55/); // 2500 - 123.45 - 50
   assert.match(dash, /ready to assign/i);
 

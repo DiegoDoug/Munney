@@ -47,27 +47,136 @@ function shiftMonth(m, delta) {
 }
 function signClass(cents) { return cents > 0 ? 'pos' : cents < 0 ? 'neg' : ''; }
 
-let toastTimer;
-function toast(msg) {
-  document.querySelector('.toast')?.remove();
+// ---------- inline icons (stroked, currentColor) ----------
+const ICON = {
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14"/>',
+  target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  left: '<polyline points="15 18 9 12 15 6"/>',
+  right: '<polyline points="9 18 15 12 9 6"/>',
+  sun: '<circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a6.6 6.6 0 0 0 9.8 9.8z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12" y2="16.5"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  networth: '<path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/>',
+  income: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+  spending: '<path d="M12 19V5"/><path d="m5 12 7-7 7 7"/>',
+  net: '<path d="M12 3v3M12 18v3"/><path d="M7.5 7.5h6a2.5 2.5 0 0 1 0 5h-3a2.5 2.5 0 0 0 0 5h6"/>',
+  wallet: '<path d="M3 8.5A2.5 2.5 0 0 1 5.5 6H18a3 3 0 0 1 3 3v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 8.5V6.5A1.5 1.5 0 0 1 4.5 5H16"/><circle cx="16.5" cy="13" r="1.3" fill="currentColor" stroke="none"/>',
+  receipt: '<path d="M5 3h14v18l-3-1.5L13 21l-3-1.5L7 21l-2-1z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  repeat: '<path d="M17 2.1 21 6l-4 3.9"/><path d="M21 6H8a4 4 0 0 0-4 4v1"/><path d="M7 21.9 3 18l4-3.9"/><path d="M3 18h13a4 4 0 0 0 4-4v-1"/>',
+  search: '<circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/>',
+  inbox: '<path d="M3 12h5l2 3h4l2-3h5"/><path d="M4 12 6.5 5h11L20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+  chart: '<path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16l3-4 3 2 5-7"/>',
+};
+function ic(name, cls = '') {
+  return `<svg${cls ? ` class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name] || ''}</svg>`;
+}
+
+function toast(msg, type = '') {
+  const root = document.getElementById('toast-root');
   const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = msg;
-  document.body.appendChild(el);
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.remove(), 2600);
+  el.className = 'toast' + (type ? ' ' + type : '');
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  const glyph = type === 'success' ? ic('check') : type === 'error' ? ic('alert') : '';
+  el.innerHTML = glyph + `<span>${esc(msg)}</span>`;
+  root.appendChild(el);
+  // keep at most 3 toasts on screen
+  while (root.children.length > 3) root.firstChild.remove();
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 200); }, 2800);
 }
 
 // ---------- modal ----------
+let modalKeyHandler = null;
 function openModal(html) {
   const root = document.getElementById('modal-root');
-  root.innerHTML = `<div class="modal-back"><div class="modal">${html}</div></div>`;
+  root.innerHTML = `<div class="modal-back"><div class="modal" role="dialog" aria-modal="true">
+    <button class="icon-btn modal-close" aria-label="Close dialog">${ic('close')}</button>${html}</div></div>`;
+  const modal = root.querySelector('.modal');
   root.querySelector('.modal-back').addEventListener('click', e => {
     if (e.target === e.currentTarget) closeModal();
   });
-  return root.querySelector('.modal');
+  root.querySelector('.modal-close').addEventListener('click', closeModal);
+  modalKeyHandler = e => { if (e.key === 'Escape') closeModal(); };
+  document.addEventListener('keydown', modalKeyHandler);
+  // focus the first field for keyboard users, unless a caller already focused one
+  requestAnimationFrame(() => {
+    if (!modal.contains(document.activeElement)) {
+      modal.querySelector('input, select, textarea, button:not(.modal-close)')?.focus();
+    }
+  });
+  return modal;
 }
-function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+function closeModal() {
+  document.getElementById('modal-root').innerHTML = '';
+  if (modalKeyHandler) { document.removeEventListener('keydown', modalKeyHandler); modalKeyHandler = null; }
+}
+
+// ---------- theme ----------
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme')
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+}
+function paintThemeToggles() {
+  const dark = currentTheme() === 'dark';
+  document.querySelectorAll('.theme-toggle').forEach(btn => {
+    const label = dark ? 'Switch to light mode' : 'Switch to dark mode';
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+    btn.innerHTML = ic(dark ? 'sun' : 'moon') + (btn.classList.contains('icon-btn') ? '' : `<span>${dark ? 'Light mode' : 'Dark mode'}</span>`);
+  });
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#101318' : '#ffffff');
+}
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  try { localStorage.setItem('munney-theme', theme); } catch {}
+  paintThemeToggles();
+}
+function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem('munney-theme'); } catch {}
+  if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+  paintThemeToggles();
+  document.querySelectorAll('.theme-toggle').forEach(btn =>
+    btn.addEventListener('click', () => setTheme(currentTheme() === 'dark' ? 'light' : 'dark')));
+}
+
+// ---------- mobile nav drawer ----------
+function setNav(open) {
+  document.body.classList.toggle('nav-open', open);
+  const toggle = document.getElementById('nav-toggle');
+  toggle?.setAttribute('aria-expanded', String(open));
+}
+function initNav() {
+  document.getElementById('nav-toggle')?.addEventListener('click', () => setNav(!document.body.classList.contains('nav-open')));
+  document.getElementById('scrim')?.addEventListener('click', () => setNav(false));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('nav-open')) setNav(false); });
+}
+
+// ---------- shared UI states ----------
+function emptyState(icon, title, text, actionHtml = '') {
+  return `<div class="empty">
+    <div class="empty-ico">${ic(icon)}</div>
+    <div class="empty-title">${esc(title)}</div>
+    ${text ? `<div class="empty-text">${esc(text)}</div>` : ''}
+    ${actionHtml}
+  </div>`;
+}
+function skeleton(kind) {
+  const line = (w) => `<div class="skeleton sk-line" style="width:${w}"></div>`;
+  const tiles = `<div class="grid cols-4">${'<div class="card"><div class="skeleton sk-tile"></div></div>'.repeat(4)}</div>`;
+  if (kind === 'tiles') {
+    return `<div class="skeleton sk-line" style="width:180px;height:22px;margin-bottom:18px"></div>${tiles}
+      <div class="grid cols-2 mt-4">${'<div class="card"><div class="skeleton sk-block"></div></div>'.repeat(2)}</div>`;
+  }
+  if (kind === 'table') {
+    return `<div class="skeleton sk-line" style="width:180px;height:22px;margin-bottom:18px"></div>
+      <div class="card">${line('100%') + line('92%') + line('96%') + line('88%') + line('94%') + line('90%')}</div>`;
+  }
+  return `<div class="card">${line('60%') + line('90%') + line('80%')}</div>`;
+}
 
 // ---------- shared state ----------
 const state = { accounts: [], categories: null, month: thisMonth() };
@@ -80,24 +189,29 @@ async function refreshCategories() {
   state.categories = await api('GET', '/api/categories');
 }
 
+const ACCT_DOT = { checking: 'var(--s1)', savings: 'var(--s2)', cash: 'var(--s3)', credit: 'var(--s7)', investment: 'var(--s5)', loan: 'var(--s8)' };
 function renderSidebar() {
   const list = document.getElementById('account-list');
   const open = state.accounts.filter(a => !a.closed);
   list.innerHTML = open.map(a => `
     <a class="acct-link" data-acct="${a.id}" href="#/accounts/${a.id}">
-      <span>${esc(a.name)}</span>
+      <span class="acct-name"><span class="acct-dot" style="background:${ACCT_DOT[a.type] || 'var(--s1)'}"></span><span>${esc(a.name)}</span></span>
       <span class="amt ${signClass(a.balance_cents)}">${fmt(a.balance_cents)}</span>
-    </a>`).join('') || '<div class="empty" style="padding:10px">No accounts yet</div>';
+    </a>`).join('') || '<div class="muted" style="padding:8px 10px;font-size:13px">No accounts yet</div>';
   highlightNav();
 }
 
 function highlightNav() {
   const hash = location.hash.slice(1) || '/';
   document.querySelectorAll('#nav a').forEach(a => {
-    a.classList.toggle('active', a.dataset.route === hash);
+    const on = a.dataset.route === hash;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
   document.querySelectorAll('.acct-link').forEach(a => {
-    a.classList.toggle('active', hash === `/accounts/${a.dataset.acct}`);
+    const on = hash === `/accounts/${a.dataset.acct}`;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   });
 }
 
@@ -121,7 +235,7 @@ const SERIES = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)',
 
 function donutChart(items) { // items: [{label, value}] cents
   const total = items.reduce((s, i) => s + i.value, 0);
-  if (!total) return '<div class="empty">No spending this month</div>';
+  if (!total) return emptyState('chart', 'No spending this month', 'Categorized spending will appear here as a breakdown.');
   const top = items.slice(0, 7);
   const other = items.slice(7).reduce((s, i) => s + i.value, 0);
   if (other > 0) top.push({ label: 'Other', value: other, gray: true });
@@ -238,30 +352,34 @@ async function pageDashboard() {
   const nwPrev = d.net_worth_series.length > 1 ? d.net_worth_series[d.net_worth_series.length - 2].net_worth_cents : d.net_worth_cents;
   const nwDelta = d.net_worth_cents - nwPrev;
   main.innerHTML = `
-    <h1>Dashboard</h1>
-    <p class="sub">${monthLabel(d.month)}</p>
+    <div class="page-head">
+      <h1>Dashboard</h1>
+      <p class="sub">Your money at a glance · ${monthLabel(d.month)}</p>
+    </div>
     <div class="grid cols-4">
       <div class="card tile">
-        <div class="label">NET WORTH</div>
+        <div class="tile-head"><span class="tile-ico">${ic('networth')}</span><span class="label">Net worth</span></div>
         <div class="value amt">${fmt(d.net_worth_cents)}</div>
         <div class="delta ${signClass(nwDelta)}">${nwDelta >= 0 ? '↑' : '↓'} ${fmt(Math.abs(nwDelta))} this month</div>
       </div>
       <div class="card tile">
-        <div class="label">INCOME</div>
+        <div class="tile-head"><span class="tile-ico good">${ic('income')}</span><span class="label">Income</span></div>
         <div class="value amt pos">${fmt(d.income_cents)}</div>
+        <div class="delta">received in ${monthShort(d.month)}</div>
       </div>
       <div class="card tile">
-        <div class="label">SPENDING</div>
+        <div class="tile-head"><span class="tile-ico bad">${ic('spending')}</span><span class="label">Spending</span></div>
         <div class="value amt">${fmt(d.spent_cents)}</div>
+        <div class="delta">spent in ${monthShort(d.month)}</div>
       </div>
       <div class="card tile">
-        <div class="label">NET</div>
+        <div class="tile-head"><span class="tile-ico">${ic('net')}</span><span class="label">Net</span></div>
         <div class="value amt ${signClass(d.net_cents)}">${fmt(d.net_cents)}</div>
         <div class="delta">${d.ready_to_assign !== 0
-          ? `<a href="#/budget">${fmt(d.ready_to_assign)} ready to assign</a>` : 'every dollar has a job ✓'}</div>
+          ? `<a href="#/budget">${fmt(d.ready_to_assign)} ready to assign →</a>` : '✓ every dollar has a job'}</div>
       </div>
     </div>
-    <div class="grid cols-2" style="margin-top:16px">
+    <div class="grid cols-2 mt-4">
       <div class="card">
         <h2>Net worth — last 12 months</h2>
         ${netWorthChart(d.net_worth_series, { width: 480, height: 180 })}
@@ -273,23 +391,24 @@ async function pageDashboard() {
             <div class="top"><span class="who">${esc(c.category)}</span>
               <span class="num amt">${fmt(c.spent_cents)}${c.assigned_cents ? ` / ${fmt(c.assigned_cents)}` : ''}</span></div>
             ${progressBar(c.spent_cents, c.assigned_cents)}
-          </div>`).join('') : '<div class="empty">No spending yet this month</div>'}
+          </div>`).join('') : emptyState('chart', 'No spending yet', 'Spending in your budget categories will show up here.')}
       </div>
-      <div class="card">
-        <h2>Upcoming recurring</h2>
-        ${d.upcoming_recurring.length ? `<table><tbody>${d.upcoming_recurring.map(s => `
+      <div class="card pad-0">
+        <div style="padding:16px 20px 4px"><h2 style="margin:0">Upcoming recurring</h2></div>
+        ${d.upcoming_recurring.length ? `<div class="table-wrap"><table><tbody>${d.upcoming_recurring.map(s => `
           <tr><td>${esc(s.payee)} <span class="tag">${s.cadence}</span></td>
-          <td class="muted">${s.next_date}</td>
-          <td class="num amt">${fmt(s.amount_cents)}</td></tr>`).join('')}</tbody></table>`
-          : '<div class="empty">Nothing detected yet — add more transaction history</div>'}
+          <td class="muted nowrap">${s.next_date}</td>
+          <td class="num amt">${fmt(s.amount_cents)}</td></tr>`).join('')}</tbody></table></div>`
+          : emptyState('repeat', 'Nothing detected yet', 'Add more transaction history and Munney will spot your subscriptions.')}
       </div>
-      <div class="card">
-        <h2>Recent transactions</h2>
-        ${d.recent_transactions.length ? `<table><tbody>${d.recent_transactions.map(t => `
-          <tr><td class="muted" style="white-space:nowrap">${t.date.slice(5)}</td><td>${esc(t.payee || '(no payee)')}</td>
+      <div class="card pad-0">
+        <div style="padding:16px 20px 4px"><h2 style="margin:0">Recent transactions</h2></div>
+        ${d.recent_transactions.length ? `<div class="table-wrap"><table><tbody>${d.recent_transactions.map(t => `
+          <tr><td class="muted nowrap">${t.date.slice(5)}</td><td>${esc(t.payee || '(no payee)')}</td>
           <td class="muted">${esc(t.category_name || '')}</td>
-          <td class="num amt ${signClass(t.amount_cents)}">${fmt(t.amount_cents)}</td></tr>`).join('')}</tbody></table>`
-          : '<div class="empty">No transactions yet</div>'}
+          <td class="num amt ${signClass(t.amount_cents)}">${fmt(t.amount_cents)}</td></tr>`).join('')}</tbody></table></div>`
+          : emptyState('receipt', 'No transactions yet', 'Add a transaction or import a CSV to get started.',
+              `<a class="btn primary" href="#/transactions">Add transaction</a>`)}
       </div>
     </div>`;
 }
@@ -299,53 +418,65 @@ async function pageBudget() {
   const rtaClass = b.ready_to_assign === 0 ? 'zero' : b.ready_to_assign < 0 ? 'negative' : '';
   const rows = b.groups.map(g => `
     <tr class="group-row"><td colspan="2">${esc(g.name)}
-      <button class="btn ghost small" data-add-cat="${g.id}">+ category</button></td>
+      <button class="btn ghost small" data-add-cat="${g.id}">${ic('plus')} category</button></td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.assigned_cents, 0))}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.activity_cents, 0))}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.available_cents, 0))}</td></tr>
     ${g.categories.filter(c => !c.hidden).map(c => {
       const pillClass = c.available_cents > 0 ? 'ok' : c.available_cents < 0 ? 'over' : 'zero';
       const target = c.target_cents ? `
-        <div class="bar" title="Target ${fmt(c.target_cents)}/mo"><i class="${c.assigned_cents >= c.target_cents ? '' : 'over'}"
-          style="width:${Math.min(100, c.target_cents ? (c.assigned_cents / c.target_cents) * 100 : 0)}%;${c.assigned_cents >= c.target_cents ? '' : 'background:var(--warn)'}"></i></div>` : '';
+        <div class="bar tiny" title="Target ${fmt(c.target_cents)}/mo"><i class="${c.assigned_cents >= c.target_cents ? '' : 'over'}"
+          style="width:${Math.min(100, c.target_cents ? (c.assigned_cents / c.target_cents) * 100 : 0)}%;${c.assigned_cents >= c.target_cents ? '' : 'background:var(--warn-fill)'}"></i></div>` : '';
       return `
       <tr data-cat-row="${c.id}">
-        <td style="width:34%">${esc(c.name)}${target}</td>
-        <td><button class="btn ghost small" data-target="${c.id}" data-target-val="${c.target_cents ?? ''}" title="Set monthly target">🎯</button></td>
-        <td class="num"><input class="assign-input" data-assign="${c.id}" value="${(c.assigned_cents / 100).toFixed(2)}"></td>
+        <td style="width:34%"><span class="cat-name">${esc(c.name)}</span>${target}</td>
+        <td><button class="icon-btn mini ${c.target_cents ? 'accent' : ''}" data-target="${c.id}" data-target-val="${c.target_cents ?? ''}"
+          aria-label="${c.target_cents ? `Monthly target ${fmt(c.target_cents)} — edit` : 'Set monthly target'}"
+          title="${c.target_cents ? `Target ${fmt(c.target_cents)}/mo` : 'Set monthly target'}"
+          style="${c.target_cents ? 'color:var(--accent)' : ''}">${ic('target')}</button></td>
+        <td class="num"><input class="assign-input" data-assign="${c.id}" inputmode="decimal" aria-label="Assigned to ${esc(c.name)}" value="${(c.assigned_cents / 100).toFixed(2)}"></td>
         <td class="num amt muted">${fmt(c.activity_cents)}</td>
         <td class="num"><span class="pill ${pillClass}">${fmt(c.available_cents)}</span></td>
       </tr>`;
     }).join('')}`).join('');
 
+  const rtaMsg = b.ready_to_assign > 0 ? 'You have money without a job. Assign it to categories below.'
+    : b.ready_to_assign < 0 ? 'You assigned more than you have — reduce some categories to get back to zero.'
+    : 'Every dollar has a job. Nicely done. 🎉';
+
   main.innerHTML = `
-    <h1>Budget</h1>
-    <p class="sub">Give every dollar a job — assign until Ready to Assign is zero.</p>
+    <div class="page-head">
+      <h1>Budget</h1>
+      <p class="sub">Give every dollar a job — assign until Ready to Assign is zero.</p>
+    </div>
     <div class="toolbar">
-      <button class="btn" id="prev-month">←</button>
-      <b style="min-width:150px;text-align:center">${monthLabel(state.month)}</b>
-      <button class="btn" id="next-month">→</button>
+      <div class="stepper">
+        <button id="prev-month" aria-label="Previous month">${ic('left')}</button>
+        <span class="label">${monthLabel(state.month)}</span>
+        <button id="next-month" aria-label="Next month">${ic('right')}</button>
+      </div>
       <span class="spacer"></span>
-      <button class="btn" id="add-group">+ Group</button>
+      <button class="btn" id="add-group">${ic('plus')} New group</button>
     </div>
     <div class="rta-banner ${rtaClass}">
-      <div>
+      <div class="rta-main">
+        <div class="rta-label">Ready to Assign</div>
         <div class="big amt ${signClass(b.ready_to_assign)}">${fmt(b.ready_to_assign)}</div>
-        <div class="hint">Ready to Assign</div>
       </div>
-      <div class="hint">
-        ${b.ready_to_assign > 0 ? 'You have money without a job. Assign it below.'
-          : b.ready_to_assign < 0 ? 'You assigned more than you have — reduce some categories.'
-          : 'Every dollar has a job. 🎉'}
-      </div>
+      <div class="hint">${rtaMsg}</div>
     </div>
-    <div class="card" style="padding:0">
-      <table>
-        <thead><tr><th>Category</th><th></th><th class="num">Assigned</th><th class="num">Activity</th><th class="num">Available</th></tr></thead>
-        <tbody>${rows || ''}</tbody>
-      </table>
-      ${b.groups.length ? '' : '<div class="empty">No categories yet — add a group to get started.</div>'}
+    <div class="card pad-0">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Category</th><th></th><th class="num">Assigned</th><th class="num">Activity</th><th class="num">Available</th></tr></thead>
+          <tbody>${rows || ''}</tbody>
+        </table>
+      </div>
+      ${b.groups.length ? '' : emptyState('wallet', 'No categories yet', 'Create a category group, then add categories to start giving your dollars a job.',
+        `<button class="btn primary" id="empty-add-group">${ic('plus')} New group</button>`)}
     </div>`;
+  const emptyAdd = main.querySelector('#empty-add-group');
+  if (emptyAdd) emptyAdd.onclick = () => modalAddGroup();
 
   main.querySelector('#prev-month').onclick = () => { state.month = shiftMonth(state.month, -1); render(); };
   main.querySelector('#next-month').onclick = () => { state.month = shiftMonth(state.month, 1); render(); };
@@ -355,7 +486,7 @@ async function pageBudget() {
   main.querySelectorAll('[data-assign]').forEach(input => {
     input.addEventListener('change', async () => {
       const cents = parseMoney(input.value);
-      if (cents === null) { toast('Enter a dollar amount'); return; }
+      if (cents === null) { toast('Enter a dollar amount', 'error'); return; }
       await api('PUT', `/api/budget/${state.month}/${input.dataset.assign}`, { assigned_cents: cents });
       render(); refreshAccounts();
     });
@@ -373,38 +504,51 @@ async function pageTransactions(accountId) {
   if (filters.uncategorized) q.set('uncategorized', '1');
   const { transactions, total } = await api('GET', `/api/transactions?${q}`);
 
+  const hasFilters = !!(filters.month || filters.search || filters.uncategorized);
   main.innerHTML = `
-    <h1>${account ? esc(account.name) : 'Transactions'}</h1>
-    <p class="sub">${account
-      ? `${account.type} · balance <b class="amt ${signClass(account.balance_cents)}">${fmt(account.balance_cents)}</b>`
-      : `${total} transaction${total === 1 ? '' : 's'}`}</p>
+    <div class="page-head">
+      <h1>${account ? esc(account.name) : 'Transactions'}</h1>
+      <p class="sub">${account
+        ? `<span class="tag">${esc(account.type)}</span> · balance <b class="amt ${signClass(account.balance_cents)}">${fmt(account.balance_cents)}</b>`
+        : `${total} transaction${total === 1 ? '' : 's'}`}</p>
+    </div>
     <div class="toolbar">
-      <button class="btn primary" id="add-txn">+ Transaction</button>
+      <button class="btn primary" id="add-txn">${ic('plus')} Transaction</button>
       <button class="btn" id="import-csv">Import CSV</button>
       ${account ? `<button class="btn danger" id="close-acct">${account.closed ? 'Reopen' : 'Close'} account</button>` : ''}
       <span class="spacer"></span>
-      <label><input type="checkbox" id="f-uncat" ${filters.uncategorized ? 'checked' : ''}> needs category</label>
-      <input type="month" id="f-month" value="${filters.month || ''}">
-      <input type="text" id="f-search" placeholder="Search payee or memo…" value="${esc(filters.search || '')}">
+      <label class="check"><input type="checkbox" id="f-uncat" ${filters.uncategorized ? 'checked' : ''}> Needs category</label>
+      <input type="month" id="f-month" aria-label="Filter by month" value="${filters.month || ''}">
+      <input type="text" class="search" id="f-search" placeholder="Search payee or memo…" aria-label="Search transactions" value="${esc(filters.search || '')}">
     </div>
-    <div class="card" style="padding:0">
-      <table>
-        <thead><tr><th>Date</th><th>Payee</th><th>Category</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead>
-        <tbody>
-        ${transactions.map(t => `
-          <tr>
-            <td class="muted" style="white-space:nowrap">${t.date}</td>
-            <td>${esc(t.payee || '(no payee)')}${t.memo ? ` <span class="muted">· ${esc(t.memo)}</span>` : ''}</td>
-            <td>${t.transfer_pair_id ? '<span class="tag">transfer</span>'
-              : `<select class="inline" data-txn-cat="${t.id}">${categoryOptions(t.category_id)}</select>`}</td>
-            <td class="muted">${esc(t.account_name)}</td>
-            <td class="num amt ${signClass(t.amount_cents)}">${fmt(t.amount_cents)}</td>
-            <td class="right"><button class="btn ghost small" data-edit="${t.id}">✏️</button><button class="btn ghost small danger" data-del="${t.id}">✕</button></td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-      ${transactions.length ? '' : '<div class="empty">No transactions match.</div>'}
+    <div class="card pad-0">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Payee</th><th>Category</th><th>Account</th><th class="num">Amount</th><th></th></tr></thead>
+          <tbody>
+          ${transactions.map(t => `
+            <tr>
+              <td class="muted nowrap">${t.date}</td>
+              <td>${esc(t.payee || '(no payee)')}${t.memo ? ` <span class="muted">· ${esc(t.memo)}</span>` : ''}</td>
+              <td>${t.transfer_pair_id ? '<span class="tag">transfer</span>'
+                : `<select class="inline" data-txn-cat="${t.id}" aria-label="Category">${categoryOptions(t.category_id)}</select>`}</td>
+              <td class="muted">${esc(t.account_name)}</td>
+              <td class="num amt ${signClass(t.amount_cents)}">${fmt(t.amount_cents)}</td>
+              <td class="num"><span class="row-actions">
+                <button class="icon-btn mini" data-edit="${t.id}" aria-label="Edit transaction" title="Edit">${ic('edit')}</button>
+                <button class="icon-btn mini danger" data-del="${t.id}" aria-label="Delete transaction" title="Delete">${ic('trash')}</button>
+              </span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${transactions.length ? '' : (hasFilters
+        ? emptyState('search', 'No matching transactions', 'Try clearing a filter or searching for something else.')
+        : emptyState('receipt', 'No transactions yet', 'Add your first transaction or import a CSV to see it here.',
+            `<button class="btn primary" id="empty-add-txn">${ic('plus')} Add transaction</button>`))}
     </div>`;
+  const emptyAddTxn = main.querySelector('#empty-add-txn');
+  if (emptyAddTxn) emptyAddTxn.onclick = () => modalTransaction(null, accountId);
 
   main.querySelector('#add-txn').onclick = () => modalTransaction(null, accountId);
   main.querySelector('#import-csv').onclick = () => modalImport(accountId);
@@ -428,7 +572,7 @@ async function pageTransactions(accountId) {
 
   main.querySelectorAll('[data-txn-cat]').forEach(sel => sel.onchange = async () => {
     await api('PATCH', `/api/transactions/${sel.dataset.txnCat}`, { category_id: sel.value ? Number(sel.value) : null });
-    toast('Categorized — Munney will remember this payee');
+    toast('Categorized — Munney will remember this payee', 'success');
     refreshAccounts();
   });
   main.querySelectorAll('[data-del]').forEach(btn => btn.onclick = async () => {
@@ -446,36 +590,43 @@ async function pageRecurring() {
   const active = series.filter(s => s.active), lapsed = series.filter(s => !s.active);
   const row = s => `
     <tr>
-      <td>${esc(s.payee)}</td>
-      <td><span class="tag">${s.cadence}</span></td>
-      <td class="muted">${s.count}× seen</td>
-      <td class="muted">${s.next_date}</td>
+      <td class="cat-name">${esc(s.payee)}</td>
+      <td><span class="tag accent">${s.cadence}</span></td>
+      <td class="muted nowrap">${s.count}× seen</td>
+      <td class="muted nowrap">${s.next_date}</td>
       <td class="num amt">${fmt(s.amount_cents)}</td>
       <td class="num amt muted">${fmt(s.monthly_cost_cents)}/mo</td>
     </tr>`;
   main.innerHTML = `
-    <h1>Recurring</h1>
-    <p class="sub">Subscriptions and bills detected from your transaction history.</p>
+    <div class="page-head">
+      <h1>Recurring</h1>
+      <p class="sub">Subscriptions and bills detected from your transaction history.</p>
+    </div>
     <div class="grid cols-4">
       <div class="card tile">
-        <div class="label">ACTIVE RECURRING</div>
+        <div class="tile-head"><span class="tile-ico">${ic('repeat')}</span><span class="label">Active recurring</span></div>
         <div class="value">${active.length}</div>
+        <div class="delta">detected series</div>
       </div>
       <div class="card tile">
-        <div class="label">EST. MONTHLY COST</div>
+        <div class="tile-head"><span class="tile-ico warn">${ic('spending')}</span><span class="label">Est. monthly cost</span></div>
         <div class="value amt">${fmt(total_monthly_cost_cents)}</div>
+        <div class="delta">across active subscriptions</div>
       </div>
     </div>
-    <div class="card" style="margin-top:16px;padding:0">
-      <table>
-        <thead><tr><th>Payee</th><th>Cadence</th><th></th><th>Next charge</th><th class="num">Amount</th><th class="num">Monthly</th></tr></thead>
-        <tbody>${active.map(row).join('')}</tbody>
-      </table>
-      ${active.length ? '' : '<div class="empty">Nothing detected yet. Recurring charges need at least 2 occurrences at a steady interval.</div>'}
+    <div class="card pad-0 mt-4">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Payee</th><th>Cadence</th><th></th><th>Next charge</th><th class="num">Amount</th><th class="num">Monthly</th></tr></thead>
+          <tbody>${active.map(row).join('')}</tbody>
+        </table>
+      </div>
+      ${active.length ? '' : emptyState('repeat', 'Nothing detected yet',
+        'Recurring charges need at least 2 occurrences at a steady interval. Add or import more history.')}
     </div>
     ${lapsed.length ? `
-      <h2 style="margin-top:20px">Possibly cancelled</h2>
-      <div class="card" style="padding:0"><table><tbody>${lapsed.map(row).join('')}</tbody></table></div>` : ''}`;
+      <h2 style="margin-top:24px">Possibly cancelled</h2>
+      <div class="card pad-0"><div class="table-wrap"><table><tbody>${lapsed.map(row).join('')}</tbody></table></div></div>` : ''}`;
 }
 
 async function pageReports() {
@@ -486,12 +637,16 @@ async function pageReports() {
     api('GET', '/api/reports/networth?months=12'),
   ]);
   main.innerHTML = `
-    <h1>Reports</h1>
-    <p class="sub">Where the money goes.</p>
+    <div class="page-head">
+      <h1>Reports</h1>
+      <p class="sub">Where the money goes.</p>
+    </div>
     <div class="toolbar">
-      <button class="btn" id="prev-month">←</button>
-      <b style="min-width:150px;text-align:center">${monthLabel(month)}</b>
-      <button class="btn" id="next-month">→</button>
+      <div class="stepper">
+        <button id="prev-month" aria-label="Previous month">${ic('left')}</button>
+        <span class="label">${monthLabel(month)}</span>
+        <button id="next-month" aria-label="Next month">${ic('right')}</button>
+      </div>
     </div>
     <div class="card">
       <h2>Spending by category — ${monthLabel(month)}</h2>
@@ -523,7 +678,7 @@ function modalAddAccount() {
         </select></div>
       <div class="form-row"><label>Current balance</label><input type="text" id="m-balance" placeholder="0.00"></div>
     </div>
-    <p class="muted" style="font-size:12px">A positive balance in a spending account becomes money that's Ready to Assign. Enter credit card debt as a negative number.</p>
+    <p class="hint-text">A positive balance in a spending account becomes money that's Ready to Assign. Enter credit card debt as a negative number.</p>
     <div class="form-actions">
       <button class="btn" id="m-cancel">Cancel</button>
       <button class="btn primary" id="m-save">Add account</button>
@@ -532,19 +687,19 @@ function modalAddAccount() {
   m.querySelector('#m-name').focus();
   m.querySelector('#m-save').onclick = async () => {
     const name = m.querySelector('#m-name').value.trim();
-    if (!name) return toast('Name is required');
+    if (!name) return toast('Name is required', 'error');
     const balance = parseMoney(m.querySelector('#m-balance').value || '0');
-    if (balance === null) return toast('Enter a valid balance');
+    if (balance === null) return toast('Enter a valid balance', 'error');
     await api('POST', '/api/accounts', { name, type: m.querySelector('#m-type').value, balance_cents: balance });
     closeModal(); await refreshAccounts(); render();
-    toast('Account added');
+    toast('Account added', 'success');
   };
 }
 
 function modalTransaction(txn, defaultAccountId) {
   const isEdit = !!txn;
   const accounts = state.accounts.filter(a => !a.closed);
-  if (!accounts.length) return toast('Add an account first');
+  if (!accounts.length) return toast('Add an account first', 'error');
   const isOutflow = !isEdit || txn.amount_cents < 0;
   const m = openModal(`
     <h2>${isEdit ? 'Edit' : 'Add'} transaction</h2>
@@ -580,7 +735,7 @@ function modalTransaction(txn, defaultAccountId) {
   };
   m.querySelector('#m-save').onclick = async () => {
     const amount = parseMoney(m.querySelector('#m-amount').value);
-    if (amount === null || amount === 0) return toast('Enter an amount');
+    if (amount === null || amount === 0) return toast('Enter an amount', 'error');
     const signed = m.querySelector('#m-dir').value === 'out' ? -Math.abs(amount) : Math.abs(amount);
     const base = {
       date: m.querySelector('#m-date').value,
@@ -601,13 +756,13 @@ function modalTransaction(txn, defaultAccountId) {
         await api('POST', '/api/transactions', body);
       }
       closeModal(); render(); refreshAccounts();
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(e.message, 'error'); }
   };
 }
 
 function modalImport(defaultAccountId) {
   const accounts = state.accounts.filter(a => !a.closed);
-  if (!accounts.length) return toast('Add an account first');
+  if (!accounts.length) return toast('Add an account first', 'error');
   const m = openModal(`
     <h2>Import CSV</h2>
     <div class="form-row"><label>Into account</label>
@@ -616,7 +771,7 @@ function modalImport(defaultAccountId) {
     <div class="form-row"><label>CSV file</label><input type="file" id="m-file" accept=".csv,text/csv"></div>
     <div class="form-row"><label>…or paste CSV</label>
       <textarea id="m-csv" rows="8" placeholder="Date,Description,Amount&#10;2026-06-01,Kroger,-45.67"></textarea></div>
-    <p class="muted" style="font-size:12px">Needs a header row with date, payee/description, and amount (or debit/credit) columns. Duplicates are skipped automatically; known payees are auto-categorized.</p>
+    <p class="hint-text">Needs a header row with date, payee/description, and amount (or debit/credit) columns. Duplicates are skipped automatically; known payees are auto-categorized.</p>
     <div class="form-actions">
       <button class="btn" id="m-cancel">Cancel</button>
       <button class="btn primary" id="m-save">Import</button>
@@ -628,14 +783,14 @@ function modalImport(defaultAccountId) {
   };
   m.querySelector('#m-save').onclick = async () => {
     const csv = m.querySelector('#m-csv').value.trim();
-    if (!csv) return toast('Choose a file or paste CSV');
+    if (!csv) return toast('Choose a file or paste CSV', 'error');
     try {
       const r = await api('POST', '/api/transactions/import', {
         account_id: Number(m.querySelector('#m-acct').value), csv,
       });
       closeModal(); render(); refreshAccounts();
-      toast(`Imported ${r.imported} · skipped ${r.skipped_duplicates} duplicates · auto-categorized ${r.auto_categorized}`);
-    } catch (e) { toast(e.message); }
+      toast(`Imported ${r.imported} · skipped ${r.skipped_duplicates} duplicates · auto-categorized ${r.auto_categorized}`, 'success');
+    } catch (e) { toast(e.message, 'error'); }
   };
 }
 
@@ -651,7 +806,7 @@ function modalAddGroup() {
   m.querySelector('#m-name').focus();
   m.querySelector('#m-save').onclick = async () => {
     const name = m.querySelector('#m-name').value.trim();
-    if (!name) return toast('Name is required');
+    if (!name) return toast('Name is required', 'error');
     await api('POST', '/api/category-groups', { name });
     await refreshCategories(); closeModal(); render();
   };
@@ -670,7 +825,7 @@ function modalAddCategory(groupId) {
   m.querySelector('#m-name').focus();
   m.querySelector('#m-save').onclick = async () => {
     const name = m.querySelector('#m-name').value.trim();
-    if (!name) return toast('Name is required');
+    if (!name) return toast('Name is required', 'error');
     const targetStr = m.querySelector('#m-target').value.trim();
     const target = targetStr ? parseMoney(targetStr) : null;
     await api('POST', '/api/categories', { group_id: groupId, name, target_cents: target });
@@ -681,10 +836,11 @@ function modalAddCategory(groupId) {
 function modalSetTarget(categoryId, current) {
   const m = openModal(`
     <h2>Monthly target</h2>
-    <p class="muted" style="font-size:12.5px">How much do you want to assign to this category each month? (YNAB rule 2: embrace your true expenses.)</p>
+    <p class="hint-text">How much do you want to assign to this category each month? (YNAB rule 2: embrace your true expenses.)</p>
     <div class="form-row"><label>Target</label><input type="text" id="m-target" value="${current ? (Number(current) / 100).toFixed(2) : ''}" placeholder="e.g. 100.00"></div>
     <div class="form-actions">
-      <button class="btn" id="m-clear">Clear target</button>
+      <button class="btn danger" id="m-clear">Clear target</button>
+      <span class="spacer"></span>
       <button class="btn" id="m-cancel">Cancel</button>
       <button class="btn primary" id="m-save">Save</button>
     </div>`);
@@ -696,19 +852,22 @@ function modalSetTarget(categoryId, current) {
   };
   m.querySelector('#m-save').onclick = async () => {
     const cents = parseMoney(m.querySelector('#m-target').value);
-    if (cents === null) return toast('Enter a dollar amount');
+    if (cents === null) return toast('Enter a dollar amount', 'error');
     await api('PATCH', `/api/categories/${categoryId}`, { target_cents: cents });
     await refreshCategories(); closeModal(); render();
   };
 }
 
 // ---------- router ----------
+const SKELETON = { '/': 'tiles', '/budget': 'table', '/transactions': 'table', '/recurring': 'tiles', '/reports': 'card' };
 async function render() {
   const hash = location.hash.slice(1) || '/';
   highlightNav();
+  setNav(false); // close the mobile drawer on navigation
+  const acctMatch = hash.match(/^\/accounts\/(\d+)$/);
+  main.innerHTML = skeleton(acctMatch ? 'table' : (SKELETON[hash] || 'card'));
   try {
     if (!state.categories) await refreshCategories();
-    const acctMatch = hash.match(/^\/accounts\/(\d+)$/);
     if (hash === '/') await pageDashboard();
     else if (hash === '/budget') await pageBudget();
     else if (hash === '/transactions') await pageTransactions(null);
@@ -716,8 +875,14 @@ async function render() {
     else if (hash === '/recurring') await pageRecurring();
     else if (hash === '/reports') await pageReports();
     else { location.hash = '#/'; return; }
+    main.focus?.({ preventScroll: true });
   } catch (e) {
-    main.innerHTML = `<div class="card"><b>Something went wrong:</b> ${esc(e.message)}</div>`;
+    main.innerHTML = `<div class="card error-card">
+      <div class="error-head">${ic('alert')} Something went wrong</div>
+      <p class="hint-text">${esc(e.message)}</p>
+      <button class="btn" id="retry">Try again</button>
+    </div>`;
+    main.querySelector('#retry').onclick = () => render();
     console.error(e);
   }
 }
@@ -726,6 +891,8 @@ window.addEventListener('hashchange', render);
 document.getElementById('add-account').onclick = () => modalAddAccount();
 
 (async function init() {
+  initTheme();
+  initNav();
   await refreshAccounts();
   await render();
 })();
