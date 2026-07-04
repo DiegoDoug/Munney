@@ -92,6 +92,7 @@ h2 { font-size: 15px; margin: 0 0 10px; }
 .grid { display: grid; gap: 16px; }
 .grid.cols-2 { grid-template-columns: 1fr 1fr; }
 .grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.tiles { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); }
 @media (max-width: 900px) { .grid.cols-2, .grid.cols-4 { grid-template-columns: 1fr; } .layout { flex-direction: column; } .sidebar { width: auto; height: auto; position: static; } }
 
 /* stat tiles */
@@ -160,6 +161,7 @@ td select.inline:hover { border-color: var(--border); background: var(--page); }
 .bar > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); }
 .bar > i.over { background: var(--bad); }
 .bar-row { margin-bottom: 12px; }
+.goal-hint { font-size: 11px; color: var(--muted); margin-top: 3px; }
 .bar-row .top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
 .bar-row .top .who { font-weight: 550; }
 .bar-row .top .num { color: var(--ink-2); }

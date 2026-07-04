@@ -2,9 +2,10 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { open, incomeCategoryId } = require('./db');
+const { open, incomeCategoryId, ensurePaymentCategory } = require('./db');
 const budget = require('./budget');
 const reports = require('./reports');
+const { ageOfMoney } = require('./aom');
 const { detectRecurring } = require('./recurring');
 const tx = require('./transactions');
 const { httpError } = tx;
@@ -47,6 +48,7 @@ function createApp({ dbPath = ':memory:' } = {}) {
     const r = db.prepare('INSERT INTO accounts (name, type, on_budget) VALUES (?, ?, ?)')
       .run(String(name).trim(), type, onBudget);
     const id = r.lastInsertRowid;
+    if (type === 'credit') ensurePaymentCategory(db, id, String(name).trim());
     const opening = Math.trunc(Number(body.balance_cents || 0));
     if (opening !== 0) {
       // Positive opening balances in on-budget asset accounts are new money => income.
@@ -64,21 +66,27 @@ function createApp({ dbPath = ':memory:' } = {}) {
     const id = Number(p.id);
     const acct = db.prepare('SELECT id FROM accounts WHERE id = ?').get(id);
     if (!acct) throw httpError(404, 'account not found');
-    if (body.name !== undefined) db.prepare('UPDATE accounts SET name = ? WHERE id = ?').run(String(body.name).trim(), id);
+    if (body.name !== undefined) {
+      db.prepare('UPDATE accounts SET name = ? WHERE id = ?').run(String(body.name).trim(), id);
+      db.prepare('UPDATE categories SET name = ? WHERE payment_account_id = ?').run(String(body.name).trim(), id);
+    }
     if (body.closed !== undefined) db.prepare('UPDATE accounts SET closed = ? WHERE id = ?').run(body.closed ? 1 : 0, id);
     return { account: budget.accountBalances(db).find(a => a.id === id) };
   });
 
   route('DELETE', '/api/accounts/:id', (req, p) => {
+    db.prepare('DELETE FROM categories WHERE payment_account_id = ?').run(Number(p.id));
     const r = db.prepare('DELETE FROM accounts WHERE id = ?').run(Number(p.id));
     if (r.changes === 0) throw httpError(404, 'account not found');
     return { ok: true };
   });
 
   // Categories
+  // Transaction-facing category list: excludes credit card payment categories
+  // (money moves into those automatically; you never categorize spending to them).
   route('GET', '/api/categories', () => {
     const groups = db.prepare('SELECT id, name, sort_order FROM category_groups WHERE is_system = 0 ORDER BY sort_order, id').all();
-    const cats = db.prepare('SELECT id, group_id, name, hidden, target_cents FROM categories WHERE is_income = 0 ORDER BY sort_order, id').all();
+    const cats = db.prepare('SELECT id, group_id, name, hidden, target_cents, target_type, target_date FROM categories WHERE is_income = 0 AND payment_account_id IS NULL ORDER BY sort_order, id').all();
     return {
       income_category_id: incomeCategoryId(db),
       groups: groups.map(g => ({ ...g, categories: cats.filter(c => c.group_id === g.id) })),
@@ -98,10 +106,25 @@ function createApp({ dbPath = ':memory:' } = {}) {
     if (!g) throw httpError(400, 'unknown group_id');
     if (!name || !String(name).trim()) throw httpError(400, 'name is required');
     const max = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM categories WHERE group_id = ?').get(g.id).m;
-    const r = db.prepare('INSERT INTO categories (group_id, name, sort_order, target_cents) VALUES (?, ?, ?, ?)')
-      .run(g.id, String(name).trim(), max + 1, body.target_cents != null ? Math.trunc(Number(body.target_cents)) : null);
+    const target = parseTarget(body);
+    const r = db.prepare('INSERT INTO categories (group_id, name, sort_order, target_cents, target_type, target_date) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(g.id, String(name).trim(), max + 1, target.cents, target.type, target.date);
     return { id: r.lastInsertRowid };
   });
+
+  // Normalizes {target_cents, target_type, target_date} from a request body.
+  function parseTarget(body) {
+    const cents = body.target_cents != null ? Math.trunc(Number(body.target_cents)) : null;
+    if (body.target_cents != null && !Number.isFinite(cents)) throw httpError(400, 'target_cents must be an integer');
+    let type = body.target_type || 'monthly';
+    if (!['monthly', 'by_date'].includes(type)) throw httpError(400, "target_type must be 'monthly' or 'by_date'");
+    let date = body.target_date ?? null;
+    if (type === 'by_date') {
+      if (!validMonth(date)) throw httpError(400, 'target_date must be YYYY-MM for by_date targets');
+    } else date = null;
+    if (cents === null) type = 'monthly';
+    return { cents, type, date: type === 'by_date' ? date : null };
+  }
 
   route('PATCH', '/api/categories/:id', (req, p, q, body) => {
     const id = Number(p.id);
@@ -109,17 +132,24 @@ function createApp({ dbPath = ':memory:' } = {}) {
     if (!cat) throw httpError(404, 'category not found');
     if (body.name !== undefined) db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(String(body.name).trim(), id);
     if (body.hidden !== undefined) db.prepare('UPDATE categories SET hidden = ? WHERE id = ?').run(body.hidden ? 1 : 0, id);
-    if (body.target_cents !== undefined) {
-      db.prepare('UPDATE categories SET target_cents = ? WHERE id = ?')
-        .run(body.target_cents === null ? null : Math.trunc(Number(body.target_cents)), id);
+    if (body.target_cents !== undefined || body.target_type !== undefined || body.target_date !== undefined) {
+      const current = db.prepare('SELECT target_cents, target_type, target_date FROM categories WHERE id = ?').get(id);
+      const target = parseTarget({
+        target_cents: body.target_cents !== undefined ? body.target_cents : current.target_cents,
+        target_type: body.target_type !== undefined ? body.target_type : current.target_type,
+        target_date: body.target_date !== undefined ? body.target_date : current.target_date,
+      });
+      db.prepare('UPDATE categories SET target_cents = ?, target_type = ?, target_date = ? WHERE id = ?')
+        .run(target.cents, target.type, target.date, id);
     }
     return { ok: true };
   });
 
   route('DELETE', '/api/categories/:id', (req, p) => {
     const id = Number(p.id);
-    const cat = db.prepare('SELECT id FROM categories WHERE id = ? AND is_income = 0').get(id);
+    const cat = db.prepare('SELECT id, payment_account_id FROM categories WHERE id = ? AND is_income = 0').get(id);
     if (!cat) throw httpError(404, 'category not found');
+    if (cat.payment_account_id) throw httpError(400, 'credit card payment categories are managed automatically — delete the account instead');
     db.prepare('UPDATE transactions SET category_id = NULL WHERE category_id = ?').run(id);
     db.prepare('DELETE FROM categories WHERE id = ?').run(id);
     return { ok: true };
@@ -180,8 +210,10 @@ function createApp({ dbPath = ':memory:' } = {}) {
     const netWorth = reports.netWorthSeries(db, 12, month);
     const recurring = detectRecurring(db, today()).filter(s => s.active).slice(0, 5);
     const recent = tx.listTransactions(db, { limit: 8 }).transactions;
+    const aom = ageOfMoney(db, today());
     return {
       month,
+      age_of_money: aom,
       income_cents: flow.income_cents,
       spent_cents: flow.spent_cents,
       net_cents: flow.net_cents,

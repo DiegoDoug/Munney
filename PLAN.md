@@ -97,8 +97,14 @@ Zero runtime dependencies — everything ships with Node ≥ 22:
 - [x] Tests: budget-engine unit tests, API integration tests, recurring-detection
       unit tests, Playwright E2E smoke
 
-Out of scope for v1: bank sync, credit-card payment categories, goals beyond monthly
-targets, multi-budget, auth (it's local, single-user).
+Added in v1.1:
+- [x] Credit card payment categories (budgeted card spending funds the payment
+      category; card payments draw it down; invariant holds against cash funds)
+- [x] Target-by-date goals with needed-per-month suggestion and
+      on-track / behind / funded / overdue status
+- [x] Age of Money (FIFO income→outflow age, average of last 10 cash outflows)
+
+Out of scope: bank sync, multi-budget, auth (it's local, single-user).
 
 ## 5. Milestones
 
