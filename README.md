@@ -29,7 +29,13 @@ npm run seed && npm start
   to categories until it hits zero.
 - Per-month budget grid with **Assigned / Activity / Available**; envelope
   balances roll over month to month (overspending carries as negative).
-- Monthly **targets** per category with funding progress.
+- **Credit card payment categories**: budgeted spending on a card automatically
+  moves money into that card's payment category, so the payment is always funded;
+  paying the bill (a transfer) draws it down.
+- **Targets**: set aside an amount every month, or save a total **by a date**
+  (Munney computes the needed-per-month amount and tracks on-track/behind/funded).
+- **Age of Money**: how old the dollars you spend are (FIFO over your income),
+  on the dashboard — 30+ days means you're living on last month's income.
 - On-budget vs. off-budget (tracking) accounts, transfers between accounts.
 
 **From Copilot — the money dashboard**

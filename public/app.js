@@ -240,7 +240,7 @@ async function pageDashboard() {
   main.innerHTML = `
     <h1>Dashboard</h1>
     <p class="sub">${monthLabel(d.month)}</p>
-    <div class="grid cols-4">
+    <div class="tiles">
       <div class="card tile">
         <div class="label">NET WORTH</div>
         <div class="value amt">${fmt(d.net_worth_cents)}</div>
@@ -259,6 +259,13 @@ async function pageDashboard() {
         <div class="value amt ${signClass(d.net_cents)}">${fmt(d.net_cents)}</div>
         <div class="delta">${d.ready_to_assign !== 0
           ? `<a href="#/budget">${fmt(d.ready_to_assign)} ready to assign</a>` : 'every dollar has a job ✓'}</div>
+      </div>
+      <div class="card tile">
+        <div class="label">AGE OF MONEY</div>
+        <div class="value">${d.age_of_money ? `${d.age_of_money.days} <span style="font-size:15px;font-weight:600">days</span>` : '—'}</div>
+        <div class="delta">${d.age_of_money
+          ? (d.age_of_money.days >= 30 ? 'living on last month’s income ✓' : 'goal: 30+ days')
+          : 'needs income + spending history'}</div>
       </div>
     </div>
     <div class="grid cols-2" style="margin-top:16px">
@@ -298,20 +305,33 @@ async function pageBudget() {
   const b = await api('GET', `/api/budget/${state.month}`);
   const rtaClass = b.ready_to_assign === 0 ? 'zero' : b.ready_to_assign < 0 ? 'negative' : '';
   const rows = b.groups.map(g => `
-    <tr class="group-row"><td colspan="2">${esc(g.name)}
-      <button class="btn ghost small" data-add-cat="${g.id}">+ category</button></td>
+    <tr class="group-row"><td colspan="2">${g.is_cc ? '💳 ' : ''}${esc(g.name)}
+      ${g.is_cc ? '' : `<button class="btn ghost small" data-add-cat="${g.id}">+ category</button>`}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.assigned_cents, 0))}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.activity_cents, 0))}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.available_cents, 0))}</td></tr>
     ${g.categories.filter(c => !c.hidden).map(c => {
       const pillClass = c.available_cents > 0 ? 'ok' : c.available_cents < 0 ? 'over' : 'zero';
-      const target = c.target_cents ? `
-        <div class="bar" title="Target ${fmt(c.target_cents)}/mo"><i class="${c.assigned_cents >= c.target_cents ? '' : 'over'}"
-          style="width:${Math.min(100, c.target_cents ? (c.assigned_cents / c.target_cents) * 100 : 0)}%;${c.assigned_cents >= c.target_cents ? '' : 'background:var(--warn)'}"></i></div>` : '';
+      let target = '';
+      if (c.goal) {
+        if (c.goal.type === 'by_date') {
+          const pct = Math.min(100, (c.available_cents / c.target_cents) * 100);
+          const done = c.goal.status === 'funded';
+          const color = done ? '' : c.goal.status === 'on_track' ? '' : 'background:var(--warn)';
+          target = `
+            <div class="bar" title="${fmt(c.available_cents)} of ${fmt(c.target_cents)} saved"><i style="width:${Math.max(0, pct)}%;${color}"></i></div>
+            <div class="goal-hint">${done ? `✓ ${fmt(c.target_cents)} funded`
+              : `${fmt(c.goal.needed_per_month_cents)}/mo to hit ${fmt(c.target_cents)} by ${monthLabel(c.goal.target_date)}${c.goal.status === 'overdue' ? ' (past due)' : ''}`}</div>`;
+        } else {
+          target = `
+            <div class="bar" title="Target ${fmt(c.target_cents)}/mo"><i style="width:${Math.min(100, (c.assigned_cents / c.target_cents) * 100)}%;${c.goal.status === 'funded' ? '' : 'background:var(--warn)'}"></i></div>`;
+        }
+      }
       return `
       <tr data-cat-row="${c.id}">
-        <td style="width:34%">${esc(c.name)}${target}</td>
-        <td><button class="btn ghost small" data-target="${c.id}" data-target-val="${c.target_cents ?? ''}" title="Set monthly target">🎯</button></td>
+        <td style="width:34%">${esc(c.name)}${c.payment_account_id ? ' <span class="tag">payment</span>' : ''}${target}</td>
+        <td><button class="btn ghost small" data-target="${c.id}" data-target-val="${c.target_cents ?? ''}"
+          data-target-type="${c.target_type || 'monthly'}" data-target-date="${c.target_date || ''}" title="Set target">🎯</button></td>
         <td class="num"><input class="assign-input" data-assign="${c.id}" value="${(c.assigned_cents / 100).toFixed(2)}"></td>
         <td class="num amt muted">${fmt(c.activity_cents)}</td>
         <td class="num"><span class="pill ${pillClass}">${fmt(c.available_cents)}</span></td>
@@ -351,7 +371,8 @@ async function pageBudget() {
   main.querySelector('#next-month').onclick = () => { state.month = shiftMonth(state.month, 1); render(); };
   main.querySelector('#add-group').onclick = () => modalAddGroup();
   main.querySelectorAll('[data-add-cat]').forEach(btn => btn.onclick = () => modalAddCategory(Number(btn.dataset.addCat)));
-  main.querySelectorAll('[data-target]').forEach(btn => btn.onclick = () => modalSetTarget(Number(btn.dataset.target), btn.dataset.targetVal));
+  main.querySelectorAll('[data-target]').forEach(btn => btn.onclick = () =>
+    modalSetTarget(Number(btn.dataset.target), btn.dataset.targetVal, btn.dataset.targetType, btn.dataset.targetDate));
   main.querySelectorAll('[data-assign]').forEach(input => {
     input.addEventListener('change', async () => {
       const cents = parseMoney(input.value);
@@ -678,16 +699,32 @@ function modalAddCategory(groupId) {
   };
 }
 
-function modalSetTarget(categoryId, current) {
+function modalSetTarget(categoryId, currentCents, currentType, currentDate) {
   const m = openModal(`
-    <h2>Monthly target</h2>
-    <p class="muted" style="font-size:12.5px">How much do you want to assign to this category each month? (YNAB rule 2: embrace your true expenses.)</p>
-    <div class="form-row"><label>Target</label><input type="text" id="m-target" value="${current ? (Number(current) / 100).toFixed(2) : ''}" placeholder="e.g. 100.00"></div>
+    <h2>Target</h2>
+    <p class="muted" style="font-size:12.5px">Plan for expenses before they happen (YNAB rule 2: embrace your true expenses).</p>
+    <div class="form-row"><label>Goal type</label>
+      <select id="m-type">
+        <option value="monthly" ${currentType !== 'by_date' ? 'selected' : ''}>Set aside an amount every month</option>
+        <option value="by_date" ${currentType === 'by_date' ? 'selected' : ''}>Save a total balance by a date</option>
+      </select></div>
+    <div class="inline-fields">
+      <div class="form-row"><label id="m-amt-label">Amount</label><input type="text" id="m-target" value="${currentCents ? (Number(currentCents) / 100).toFixed(2) : ''}" placeholder="e.g. 100.00"></div>
+      <div class="form-row" id="m-date-row" style="display:${currentType === 'by_date' ? '' : 'none'}">
+        <label>By month</label><input type="month" id="m-date" value="${currentDate || ''}"></div>
+    </div>
     <div class="form-actions">
       <button class="btn" id="m-clear">Clear target</button>
       <button class="btn" id="m-cancel">Cancel</button>
       <button class="btn primary" id="m-save">Save</button>
     </div>`);
+  const typeSel = m.querySelector('#m-type');
+  const syncType = () => {
+    m.querySelector('#m-date-row').style.display = typeSel.value === 'by_date' ? '' : 'none';
+    m.querySelector('#m-amt-label').textContent = typeSel.value === 'by_date' ? 'Total to save' : 'Amount per month';
+  };
+  syncType();
+  typeSel.onchange = syncType;
   m.querySelector('#m-cancel').onclick = closeModal;
   m.querySelector('#m-target').focus();
   m.querySelector('#m-clear').onclick = async () => {
@@ -697,8 +734,15 @@ function modalSetTarget(categoryId, current) {
   m.querySelector('#m-save').onclick = async () => {
     const cents = parseMoney(m.querySelector('#m-target').value);
     if (cents === null) return toast('Enter a dollar amount');
-    await api('PATCH', `/api/categories/${categoryId}`, { target_cents: cents });
-    await refreshCategories(); closeModal(); render();
+    const body = { target_cents: cents, target_type: typeSel.value };
+    if (typeSel.value === 'by_date') {
+      body.target_date = m.querySelector('#m-date').value;
+      if (!body.target_date) return toast('Pick a target month');
+    }
+    try {
+      await api('PATCH', `/api/categories/${categoryId}`, body);
+      await refreshCategories(); closeModal(); render();
+    } catch (e) { toast(e.message); }
   };
 }
 

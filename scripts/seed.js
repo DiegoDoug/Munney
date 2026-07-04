@@ -85,8 +85,12 @@ for (let mo = -6; mo <= 0; mo++) {
 // monthly targets
 for (const [name, cents] of [
   ['Rent/Mortgage', 145000], ['Groceries', 45000], ['Dining Out', 20000],
-  ['Emergency Fund', 50000], ['Vacation', 20000],
+  ['Emergency Fund', 50000],
 ]) db.prepare('UPDATE categories SET target_cents = ? WHERE name = ?').run(cents, name);
+
+// a save-by-date goal: $2,000 vacation fund due in 6 months
+const due = month(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 6, 1)));
+db.prepare("UPDATE categories SET target_cents = 200000, target_type = 'by_date', target_date = ? WHERE name = 'Vacation'").run(due);
 
 const rta = budget.readyToAssign(db, month(now));
 console.log(`Seeded demo data into ${DB_PATH}`);
