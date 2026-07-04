@@ -100,4 +100,38 @@ test('full flow: account -> transactions -> budget -> dashboard', async () => {
   await page.fill('#m-csv', 'Date,Description,Amount\n2026-06-20,Coffee Shop,-4.50\n2026-06-21,Refund,12.00');
   await page.click('.modal #m-save');
   await page.waitForSelector('td:has-text("Coffee Shop")');
+
+  // --- credit card: spending on the card funds its payment category
+  await page.click('#add-account');
+  await page.fill('#m-name', 'Visa');
+  await page.selectOption('.modal #m-type', 'credit');
+  await page.click('.modal #m-save');
+  await page.waitForSelector('.acct-link:has-text("Visa")');
+
+  await page.click('#add-txn');
+  await page.selectOption('.modal #m-acct', { label: 'Visa' });
+  await page.fill('#m-payee', 'Target Store');
+  await page.selectOption('#m-cat', { label: 'Groceries' });
+  await page.fill('#m-amount', '60');
+  await page.click('.modal #m-save');
+  await page.waitForSelector('td:has-text("Target Store")');
+
+  await page.goto(base + '/#/budget');
+  await page.waitForSelector('tr:has-text("Credit Card Payments")');
+  const ccRow = page.locator('tr', { has: page.locator('.tag:has-text("payment")') }).first();
+  assert.match(await ccRow.textContent(), /\$60\.00/, 'payment category should hold $60 for the card bill');
+
+  // --- target-by-date goal shows a per-month suggestion
+  const vacationRow = page.locator('tr', { has: page.locator('td', { hasText: 'Vacation' }) }).first();
+  await vacationRow.locator('[data-target]').click();
+  await page.selectOption('#m-type', 'by_date');
+  await page.fill('#m-target', '1200');
+  await page.fill('#m-date', '2027-05');
+  await page.click('.modal #m-save');
+  await page.waitForSelector('.goal-hint');
+  assert.match(await page.locator('.goal-hint').first().textContent(), /\/mo to hit \$1,200\.00 by May 2027/);
+
+  // --- age of money tile appears on the dashboard
+  await page.goto(base + '/#/');
+  await page.waitForSelector('.tile:has-text("AGE OF MONEY")');
 });

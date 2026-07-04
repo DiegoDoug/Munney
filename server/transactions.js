@@ -40,8 +40,9 @@ function createTransaction(db, input) {
 
   let categoryId = input.category_id ?? null;
   if (categoryId) {
-    const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(categoryId);
+    const cat = db.prepare('SELECT id, payment_account_id FROM categories WHERE id = ?').get(categoryId);
     if (!cat) throw httpError(400, 'unknown category_id');
+    if (cat.payment_account_id) throw httpError(400, 'cannot categorize to a credit card payment category — pay the card with a transfer instead');
     learnRule(db, payee, categoryId);
   } else if (payee) {
     categoryId = suggestCategory(db, payee);
@@ -80,8 +81,9 @@ function updateTransaction(db, id, input) {
   }
   if (input.category_id !== undefined && !txn.transfer_pair_id) {
     if (input.category_id !== null) {
-      const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(input.category_id);
+      const cat = db.prepare('SELECT id, payment_account_id FROM categories WHERE id = ?').get(input.category_id);
       if (!cat) throw httpError(400, 'unknown category_id');
+      if (cat.payment_account_id) throw httpError(400, 'cannot categorize to a credit card payment category — pay the card with a transfer instead');
       learnRule(db, input.payee !== undefined ? input.payee : txn.payee, input.category_id);
     }
     fields.category_id = input.category_id;
@@ -215,7 +217,7 @@ function importCSV(db, accountId, csvText) {
 
   const incomeId = incomeCategoryId(db);
   const catByName = new Map(
-    db.prepare('SELECT id, name FROM categories WHERE is_income = 0').all()
+    db.prepare('SELECT id, name FROM categories WHERE is_income = 0 AND payment_account_id IS NULL').all()
       .map(c => [c.name.toLowerCase(), c.id])
   );
 

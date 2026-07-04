@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS categories (
   sort_order INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
   target_cents INTEGER,
-  is_income INTEGER NOT NULL DEFAULT 0
+  target_type TEXT NOT NULL DEFAULT 'monthly',  -- 'monthly' | 'by_date'
+  target_date TEXT,                             -- YYYY-MM, for by_date targets
+  is_income INTEGER NOT NULL DEFAULT 0,
+  payment_account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -73,8 +76,40 @@ function open(dbPath) {
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  migrate(db);
   seedSystemRows(db);
+  ensurePaymentCategories(db);
   return db;
+}
+
+// Add columns introduced after v1 to databases created before them.
+function migrate(db) {
+  const cols = new Set(db.prepare('PRAGMA table_info(categories)').all().map(c => c.name));
+  if (!cols.has('target_type')) db.exec("ALTER TABLE categories ADD COLUMN target_type TEXT NOT NULL DEFAULT 'monthly'");
+  if (!cols.has('target_date')) db.exec('ALTER TABLE categories ADD COLUMN target_date TEXT');
+  if (!cols.has('payment_account_id')) db.exec('ALTER TABLE categories ADD COLUMN payment_account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE');
+}
+
+// YNAB-style: every credit card account gets a payment category in a dedicated
+// group (is_system = 2: shown on the budget, hidden from transaction categorization).
+const CC_GROUP = 'Credit Card Payments';
+
+function ensurePaymentCategories(db) {
+  const cards = db.prepare("SELECT id, name FROM accounts WHERE type = 'credit'").all();
+  for (const card of cards) ensurePaymentCategory(db, card.id, card.name);
+}
+
+function ensurePaymentCategory(db, accountId, accountName) {
+  const existing = db.prepare('SELECT id FROM categories WHERE payment_account_id = ?').get(accountId);
+  if (existing) return existing.id;
+  let group = db.prepare('SELECT id FROM category_groups WHERE is_system = 2').get();
+  if (!group) {
+    db.prepare('INSERT INTO category_groups (name, sort_order, is_system) VALUES (?, 999, 2)').run(CC_GROUP);
+    group = db.prepare('SELECT id FROM category_groups WHERE is_system = 2').get();
+  }
+  const r = db.prepare('INSERT INTO categories (group_id, name, payment_account_id) VALUES (?, ?, ?)')
+    .run(group.id, accountName, accountId);
+  return r.lastInsertRowid;
 }
 
 function seedSystemRows(db) {
@@ -102,4 +137,4 @@ function incomeCategoryId(db) {
   return db.prepare('SELECT id FROM categories WHERE is_income = 1').get().id;
 }
 
-module.exports = { open, incomeCategoryId };
+module.exports = { open, incomeCategoryId, ensurePaymentCategory };
