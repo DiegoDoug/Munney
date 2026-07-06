@@ -426,7 +426,13 @@ async function pageBudget() {
   const rtaClass = b.ready_to_assign === 0 ? 'zero' : b.ready_to_assign < 0 ? 'negative' : '';
   const rows = b.groups.map(g => `
     <tr class="group-row"><td colspan="2">${g.is_cc ? '💳 ' : ''}${esc(g.name)}
-      ${g.is_cc ? '' : `<button class="btn ghost small" data-add-cat="${g.id}">${ic('plus')} category</button>`}</td>
+      ${g.is_cc ? '' : `<span class="row-actions">
+        <button class="btn ghost small" data-add-cat="${g.id}">${ic('plus')} category</button>
+        <button class="icon-btn mini" data-edit-group="${g.id}" data-group-name="${esc(g.name)}" title="Rename group" aria-label="Rename group">${ic('edit')}</button>
+        <button class="icon-btn mini" data-move-group="${g.id}" data-dir="up" title="Move group up" aria-label="Move group up">↑</button>
+        <button class="icon-btn mini" data-move-group="${g.id}" data-dir="down" title="Move group down" aria-label="Move group down">↓</button>
+        <button class="icon-btn mini danger" data-del-group="${g.id}" data-group-name="${esc(g.name)}" title="Delete group" aria-label="Delete group">${ic('trash')}</button>
+      </span>`}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.assigned_cents, 0))}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.activity_cents, 0))}</td>
       <td class="num">${fmt(g.categories.reduce((s, c) => s + c.available_cents, 0))}</td></tr>
@@ -450,7 +456,13 @@ async function pageBudget() {
       const hasTarget = c.target_cents != null;
       return `
       <tr data-cat-row="${c.id}">
-        <td style="width:34%"><span class="cat-name">${esc(c.name)}</span>${c.payment_account_id ? ' <span class="tag">payment</span>' : ''}${target}</td>
+        <td style="width:34%"><span class="cat-name">${esc(c.name)}</span>${c.payment_account_id ? ' <span class="tag">payment</span>' : `
+          <span class="row-actions">
+            <button class="icon-btn mini" data-edit-cat="${c.id}" data-group="${g.id}" title="Edit category" aria-label="Edit category">${ic('edit')}</button>
+            <button class="icon-btn mini" data-move-cat="${c.id}" data-group="${g.id}" data-dir="up" title="Move up" aria-label="Move up">↑</button>
+            <button class="icon-btn mini" data-move-cat="${c.id}" data-group="${g.id}" data-dir="down" title="Move down" aria-label="Move down">↓</button>
+            <button class="icon-btn mini danger" data-del-cat="${c.id}" data-cat-name="${esc(c.name)}" title="Delete category" aria-label="Delete category">${ic('trash')}</button>
+          </span>`}${target}</td>
         <td><button class="icon-btn mini" data-target="${c.id}" data-target-val="${c.target_cents ?? ''}"
           data-target-type="${c.target_type || 'monthly'}" data-target-date="${c.target_date || ''}"
           aria-label="${hasTarget ? 'Edit target' : 'Set target'}" title="${hasTarget ? 'Edit target' : 'Set target'}"
@@ -514,6 +526,34 @@ async function pageBudget() {
     });
     input.addEventListener('focus', () => input.select());
   });
+
+  // --- group & category management ---
+  const userGroups = b.groups.filter(g => !g.is_cc);
+  const swapReorder = async (endpoint, ids, id, dir) => {
+    const i = ids.indexOf(id);
+    const j = dir === 'up' ? i - 1 : i + 1;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    await api('POST', endpoint, { ids });
+    await refreshCategories(); render();
+  };
+  main.querySelectorAll('[data-edit-group]').forEach(btn => btn.onclick = () =>
+    modalEditGroup(Number(btn.dataset.editGroup), btn.dataset.groupName));
+  main.querySelectorAll('[data-del-group]').forEach(btn => btn.onclick = () =>
+    confirmDeleteGroup(Number(btn.dataset.delGroup), btn.dataset.groupName));
+  main.querySelectorAll('[data-move-group]').forEach(btn => btn.onclick = () =>
+    swapReorder('/api/category-groups/reorder', userGroups.map(g => g.id), Number(btn.dataset.moveGroup), btn.dataset.dir));
+  main.querySelectorAll('[data-edit-cat]').forEach(btn => btn.onclick = () => {
+    const gid = Number(btn.dataset.group);
+    const cat = b.groups.find(g => g.id === gid).categories.find(c => c.id === Number(btn.dataset.editCat));
+    modalEditCategory(cat, gid);
+  });
+  main.querySelectorAll('[data-del-cat]').forEach(btn => btn.onclick = () =>
+    confirmDeleteCategory(Number(btn.dataset.delCat), btn.dataset.catName));
+  main.querySelectorAll('[data-move-cat]').forEach(btn => btn.onclick = () => {
+    const g = b.groups.find(x => x.id === Number(btn.dataset.group));
+    swapReorder('/api/categories/reorder', g.categories.filter(c => !c.hidden).map(c => c.id), Number(btn.dataset.moveCat), btn.dataset.dir);
+  });
 }
 
 async function pageTransactions(accountId) {
@@ -537,7 +577,9 @@ async function pageTransactions(accountId) {
     <div class="toolbar">
       <button class="btn primary" id="add-txn">${ic('plus')} Transaction</button>
       <button class="btn" id="import-csv">Import CSV</button>
-      ${account ? `<button class="btn danger" id="close-acct">${account.closed ? 'Reopen' : 'Close'} account</button>` : ''}
+      ${account ? `<button class="btn" id="edit-acct">Edit account</button>
+      <button class="btn" id="close-acct">${account.closed ? 'Reopen' : 'Close'} account</button>
+      <button class="btn danger" id="del-acct">Delete account</button>` : ''}
       <span class="spacer"></span>
       <label class="check"><input type="checkbox" id="f-uncat" ${filters.uncategorized ? 'checked' : ''}> Needs category</label>
       <input type="month" id="f-month" aria-label="Filter by month" value="${filters.month || ''}">
@@ -578,6 +620,23 @@ async function pageTransactions(accountId) {
   if (closeBtn) closeBtn.onclick = async () => {
     await api('PATCH', `/api/accounts/${accountId}`, { closed: account.closed ? 0 : 1 });
     await refreshAccounts(); location.hash = '#/transactions';
+  };
+  const editBtn = main.querySelector('#edit-acct');
+  if (editBtn) editBtn.onclick = () => modalEditAccount(account);
+  const delBtn = main.querySelector('#del-acct');
+  if (delBtn) delBtn.onclick = async () => {
+    const ok = await confirmModal({
+      title: `Delete "${account.name}"?`,
+      message: 'This permanently deletes the account and every transaction in it. This cannot be undone.',
+      confirmLabel: 'Delete account', danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api('DELETE', `/api/accounts/${accountId}`);
+      await refreshAccounts(); await refreshCategories();
+      location.hash = '#/transactions';
+      toast('Account deleted', 'success');
+    } catch (e) { toast(e.message, 'error'); }
   };
   const setFilter = () => {
     state.txnFilters = {
@@ -718,6 +777,44 @@ function modalAddAccount() {
   };
 }
 
+function modalEditAccount(account) {
+  const types = [['checking', 'Checking'], ['savings', 'Savings'], ['cash', 'Cash'],
+    ['credit', 'Credit card'], ['investment', 'Investment (off-budget)'], ['loan', 'Loan (off-budget)']];
+  const m = openModal(`
+    <h2>Edit account</h2>
+    <div class="form-row"><label>Name</label><input type="text" id="m-name" value="${esc(account.name)}"></div>
+    <div class="inline-fields">
+      <div class="form-row"><label>Type</label>
+        <select id="m-type">${types.map(([v, l]) => `<option value="${v}" ${account.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Budget</label>
+        <select id="m-onbudget">
+          <option value="1" ${account.on_budget ? 'selected' : ''}>On budget</option>
+          <option value="0" ${!account.on_budget ? 'selected' : ''}>Off budget (tracking)</option>
+        </select></div>
+    </div>
+    <p class="hint-text">Changing the type to/from Credit card adds or removes its payment category. Balance is adjusted by editing transactions.</p>
+    <div class="form-actions">
+      <button class="btn" id="m-cancel">Cancel</button>
+      <button class="btn primary" id="m-save">Save</button>
+    </div>`);
+  m.querySelector('#m-cancel').onclick = closeModal;
+  const input = m.querySelector('#m-name');
+  input.focus(); input.select();
+  m.querySelector('#m-save').onclick = async () => {
+    const name = input.value.trim();
+    if (!name) return toast('Name is required', 'error');
+    try {
+      await api('PATCH', `/api/accounts/${account.id}`, {
+        name,
+        type: m.querySelector('#m-type').value,
+        on_budget: m.querySelector('#m-onbudget').value === '1' ? 1 : 0,
+      });
+      await refreshAccounts(); await refreshCategories(); closeModal(); render();
+      toast('Account updated', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
 function modalTransaction(txn, defaultAccountId) {
   const isEdit = !!txn;
   const accounts = state.accounts.filter(a => !a.closed);
@@ -855,6 +952,105 @@ function modalAddCategory(groupId) {
   };
 }
 
+// Generic confirm dialog → resolves true on confirm, false otherwise.
+function confirmModal({ title, message, confirmLabel = 'Confirm', danger = false }) {
+  return new Promise(resolve => {
+    const m = openModal(`
+      <h2>${esc(title)}</h2>
+      <p class="hint-text">${esc(message)}</p>
+      <div class="form-actions">
+        <button class="btn" id="m-cancel">Cancel</button>
+        <button class="btn ${danger ? 'danger' : 'primary'}" id="m-ok">${esc(confirmLabel)}</button>
+      </div>`);
+    const done = v => { closeModal(); resolve(v); };
+    m.querySelector('#m-cancel').onclick = () => done(false);
+    m.querySelector('#m-ok').onclick = () => done(true);
+  });
+}
+
+function modalEditGroup(groupId, currentName) {
+  const m = openModal(`
+    <h2>Rename group</h2>
+    <div class="form-row"><label>Name</label><input type="text" id="m-name" value="${esc(currentName)}"></div>
+    <div class="form-actions">
+      <button class="btn danger" id="m-del">Delete group</button>
+      <span class="spacer"></span>
+      <button class="btn" id="m-cancel">Cancel</button>
+      <button class="btn primary" id="m-save">Save</button>
+    </div>`);
+  m.querySelector('#m-cancel').onclick = closeModal;
+  const input = m.querySelector('#m-name');
+  input.focus(); input.select();
+  m.querySelector('#m-del').onclick = () => { closeModal(); confirmDeleteGroup(groupId, currentName); };
+  m.querySelector('#m-save').onclick = async () => {
+    const name = input.value.trim();
+    if (!name) return toast('Name is required', 'error');
+    try {
+      await api('PATCH', `/api/category-groups/${groupId}`, { name });
+      await refreshCategories(); closeModal(); render();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+async function confirmDeleteGroup(groupId, name) {
+  const ok = await confirmModal({
+    title: `Delete "${name}"?`,
+    message: 'This deletes the group and all its categories. Transactions in those categories become uncategorized. This cannot be undone.',
+    confirmLabel: 'Delete group', danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api('DELETE', `/api/category-groups/${groupId}`);
+    await refreshCategories(); render();
+    toast('Group deleted', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function modalEditCategory(cat, currentGroupId) {
+  const groupOpts = state.categories.groups.map(g =>
+    `<option value="${g.id}" ${g.id === currentGroupId ? 'selected' : ''}>${esc(g.name)}</option>`).join('');
+  const m = openModal(`
+    <h2>Edit category</h2>
+    <div class="form-row"><label>Name</label><input type="text" id="m-name" value="${esc(cat.name)}"></div>
+    <div class="form-row"><label>Group</label><select id="m-group">${groupOpts}</select></div>
+    <label class="check"><input type="checkbox" id="m-hidden" ${cat.hidden ? 'checked' : ''}> Hide this category from the budget</label>
+    <div class="form-actions">
+      <button class="btn danger" id="m-del">Delete</button>
+      <span class="spacer"></span>
+      <button class="btn" id="m-cancel">Cancel</button>
+      <button class="btn primary" id="m-save">Save</button>
+    </div>`);
+  m.querySelector('#m-cancel').onclick = closeModal;
+  const input = m.querySelector('#m-name');
+  input.focus(); input.select();
+  m.querySelector('#m-del').onclick = () => { closeModal(); confirmDeleteCategory(cat.id, cat.name); };
+  m.querySelector('#m-save').onclick = async () => {
+    const name = input.value.trim();
+    if (!name) return toast('Name is required', 'error');
+    const body = { name, hidden: m.querySelector('#m-hidden').checked };
+    const newGroup = Number(m.querySelector('#m-group').value);
+    if (newGroup !== currentGroupId) body.group_id = newGroup;
+    try {
+      await api('PATCH', `/api/categories/${cat.id}`, body);
+      await refreshCategories(); closeModal(); render();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
+async function confirmDeleteCategory(categoryId, name) {
+  const ok = await confirmModal({
+    title: `Delete "${name}"?`,
+    message: 'Transactions in this category become uncategorized. This cannot be undone.',
+    confirmLabel: 'Delete category', danger: true,
+  });
+  if (!ok) return;
+  try {
+    await api('DELETE', `/api/categories/${categoryId}`);
+    await refreshCategories(); render();
+    toast('Category deleted', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
 function modalSetTarget(categoryId, currentCents, currentType, currentDate) {
   const m = openModal(`
     <h2>Target</h2>
@@ -903,8 +1099,70 @@ function modalSetTarget(categoryId, currentCents, currentType, currentDate) {
   };
 }
 
+async function pageSettings() {
+  const { rules } = await api('GET', '/api/payee-rules');
+  main.innerHTML = `
+    <div class="page-head">
+      <h1>Settings</h1>
+      <p class="sub">Manage how Munney behaves and control your data.</p>
+    </div>
+    <div class="card">
+      <h2>Auto-categorization rules</h2>
+      <p class="hint-text">Munney learns which category to use for each payee. Edit or remove any rule below.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Payee (normalized)</th><th>Category</th><th></th></tr></thead>
+          <tbody>
+          ${rules.map(r => `
+            <tr>
+              <td class="cat-name">${esc(r.payee_norm)}</td>
+              <td><select class="inline" data-rule-cat="${esc(r.payee_norm)}" aria-label="Category for ${esc(r.payee_norm)}">${categoryOptions(r.category_id, { includeIncome: false, includeNone: false })}</select></td>
+              <td class="num"><button class="icon-btn mini danger" data-del-rule="${esc(r.payee_norm)}" title="Delete rule" aria-label="Delete rule">${ic('trash')}</button></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${rules.length ? '' : emptyState('inbox', 'No rules yet', 'As you categorize transactions, Munney remembers each payee here.')}
+    </div>
+    <div class="card danger-zone">
+      <h2>Reset all data</h2>
+      <p class="hint-text">Permanently delete every account, transaction, budget and rule, returning Munney to a fresh install. This cannot be undone.</p>
+      <label class="check"><input type="checkbox" id="keep-starters" checked> Keep the starter category groups</label>
+      <div class="form-actions"><button class="btn danger" id="reset-data">Reset everything</button></div>
+    </div>`;
+
+  main.querySelectorAll('[data-rule-cat]').forEach(sel => sel.onchange = async () => {
+    try {
+      await api('PUT', `/api/payee-rules/${encodeURIComponent(sel.dataset.ruleCat)}`, { category_id: Number(sel.value) });
+      toast('Rule updated', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  main.querySelectorAll('[data-del-rule]').forEach(btn => btn.onclick = async () => {
+    try {
+      await api('DELETE', `/api/payee-rules/${encodeURIComponent(btn.dataset.delRule)}`);
+      render();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  main.querySelector('#reset-data').onclick = async () => {
+    const keep = main.querySelector('#keep-starters').checked;
+    const ok = await confirmModal({
+      title: 'Reset all data?',
+      message: 'Every account, transaction, budget and rule will be permanently deleted. This cannot be undone.',
+      confirmLabel: 'Yes, wipe everything', danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api('POST', '/api/reset', { keep_starter_categories: keep });
+      state.categories = null;
+      await refreshAccounts(); await refreshCategories();
+      location.hash = '#/';
+      toast('All data reset', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  };
+}
+
 // ---------- router ----------
-const SKELETON = { '/': 'tiles', '/budget': 'table', '/transactions': 'table', '/recurring': 'tiles', '/reports': 'card' };
+const SKELETON = { '/': 'tiles', '/budget': 'table', '/transactions': 'table', '/recurring': 'tiles', '/reports': 'card', '/settings': 'card' };
 async function render() {
   const hash = location.hash.slice(1) || '/';
   highlightNav();
@@ -919,6 +1177,7 @@ async function render() {
     else if (acctMatch) await pageTransactions(Number(acctMatch[1]));
     else if (hash === '/recurring') await pageRecurring();
     else if (hash === '/reports') await pageReports();
+    else if (hash === '/settings') await pageSettings();
     else { location.hash = '#/'; return; }
     main.focus?.({ preventScroll: true });
   } catch (e) {

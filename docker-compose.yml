@@ -1,0 +1,20 @@
+# Munney — one-command deploy.
+#   docker compose up -d   →   http://localhost:4321
+services:
+  munney:
+    build: .
+    image: munney:latest
+    container_name: munney
+    restart: unless-stopped
+    ports:
+      - "4321:4321"
+    environment:
+      PORT: "4321"
+      HOST: "0.0.0.0"
+      MUNNEY_DB: "/app/data/munney.db"
+    volumes:
+      # Named volume keeps your SQLite database across restarts and rebuilds.
+      - munney-data:/app/data
+
+volumes:
+  munney-data:

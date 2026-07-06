@@ -2,7 +2,7 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { open, incomeCategoryId, ensurePaymentCategory } = require('./db');
+const { open, incomeCategoryId, ensurePaymentCategory, resetData } = require('./db');
 const budget = require('./budget');
 const reports = require('./reports');
 const { ageOfMoney } = require('./aom');
@@ -64,12 +64,27 @@ function createApp({ dbPath = ':memory:' } = {}) {
 
   route('PATCH', '/api/accounts/:id', (req, p, q, body) => {
     const id = Number(p.id);
-    const acct = db.prepare('SELECT id FROM accounts WHERE id = ?').get(id);
+    const acct = db.prepare('SELECT id, type FROM accounts WHERE id = ?').get(id);
     if (!acct) throw httpError(404, 'account not found');
     if (body.name !== undefined) {
-      db.prepare('UPDATE accounts SET name = ? WHERE id = ?').run(String(body.name).trim(), id);
-      db.prepare('UPDATE categories SET name = ? WHERE payment_account_id = ?').run(String(body.name).trim(), id);
+      const name = String(body.name).trim();
+      if (!name) throw httpError(400, 'name cannot be empty');
+      db.prepare('UPDATE accounts SET name = ? WHERE id = ?').run(name, id);
+      db.prepare('UPDATE categories SET name = ? WHERE payment_account_id = ?').run(name, id);
     }
+    if (body.type !== undefined && body.type !== acct.type) {
+      const types = ['checking', 'savings', 'cash', 'credit', 'investment', 'loan'];
+      if (!types.includes(body.type)) throw httpError(400, `type must be one of ${types.join(', ')}`);
+      db.prepare('UPDATE accounts SET type = ? WHERE id = ?').run(body.type, id);
+      // Keep the credit-card payment category in sync with the account's type.
+      if (body.type === 'credit') {
+        const name = db.prepare('SELECT name FROM accounts WHERE id = ?').get(id).name;
+        ensurePaymentCategory(db, id, name);
+      } else {
+        db.prepare('DELETE FROM categories WHERE payment_account_id = ?').run(id);
+      }
+    }
+    if (body.on_budget !== undefined) db.prepare('UPDATE accounts SET on_budget = ? WHERE id = ?').run(body.on_budget ? 1 : 0, id);
     if (body.closed !== undefined) db.prepare('UPDATE accounts SET closed = ? WHERE id = ?').run(body.closed ? 1 : 0, id);
     return { account: budget.accountBalances(db).find(a => a.id === id) };
   });
@@ -100,6 +115,41 @@ function createApp({ dbPath = ':memory:' } = {}) {
     return { id: r.lastInsertRowid, name: String(body.name).trim() };
   });
 
+  // Guard: only user groups (is_system = 0) may be renamed/deleted/reordered.
+  const userGroupOr404 = id => {
+    const g = db.prepare('SELECT id FROM category_groups WHERE id = ? AND is_system = 0').get(Number(id));
+    if (!g) throw httpError(404, 'category group not found');
+    return g;
+  };
+
+  route('PATCH', '/api/category-groups/:id', (req, p, q, body) => {
+    userGroupOr404(p.id);
+    if (body.name !== undefined) {
+      if (!String(body.name).trim()) throw httpError(400, 'name is required');
+      db.prepare('UPDATE category_groups SET name = ? WHERE id = ?').run(String(body.name).trim(), Number(p.id));
+    }
+    return { ok: true };
+  });
+
+  route('DELETE', '/api/category-groups/:id', (req, p) => {
+    userGroupOr404(p.id);
+    // Detach transactions from every category in the group, then cascade-delete.
+    const cats = db.prepare('SELECT id FROM categories WHERE group_id = ?').all(Number(p.id));
+    for (const c of cats) db.prepare('UPDATE transactions SET category_id = NULL WHERE category_id = ?').run(c.id);
+    db.prepare('DELETE FROM category_groups WHERE id = ?').run(Number(p.id));
+    return { ok: true };
+  });
+
+  // Reorder groups: body.ids is the full ordered list of user-group ids.
+  route('POST', '/api/category-groups/reorder', (req, p, q, body) => {
+    if (!Array.isArray(body.ids)) throw httpError(400, 'ids must be an array');
+    let order = 0;
+    for (const id of body.ids) {
+      db.prepare('UPDATE category_groups SET sort_order = ? WHERE id = ? AND is_system = 0').run(order++, Number(id));
+    }
+    return { ok: true };
+  });
+
   route('POST', '/api/categories', (req, p, q, body) => {
     const { group_id, name } = body;
     const g = db.prepare('SELECT id FROM category_groups WHERE id = ? AND is_system = 0').get(Number(group_id));
@@ -128,10 +178,20 @@ function createApp({ dbPath = ':memory:' } = {}) {
 
   route('PATCH', '/api/categories/:id', (req, p, q, body) => {
     const id = Number(p.id);
-    const cat = db.prepare('SELECT id FROM categories WHERE id = ? AND is_income = 0').get(id);
+    const cat = db.prepare('SELECT id, payment_account_id FROM categories WHERE id = ? AND is_income = 0').get(id);
     if (!cat) throw httpError(404, 'category not found');
-    if (body.name !== undefined) db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(String(body.name).trim(), id);
+    if (body.name !== undefined) {
+      if (!String(body.name).trim()) throw httpError(400, 'name is required');
+      db.prepare('UPDATE categories SET name = ? WHERE id = ?').run(String(body.name).trim(), id);
+    }
     if (body.hidden !== undefined) db.prepare('UPDATE categories SET hidden = ? WHERE id = ?').run(body.hidden ? 1 : 0, id);
+    if (body.group_id !== undefined) {
+      if (cat.payment_account_id) throw httpError(400, 'credit card payment categories cannot be moved');
+      const g = db.prepare('SELECT id FROM category_groups WHERE id = ? AND is_system = 0').get(Number(body.group_id));
+      if (!g) throw httpError(400, 'unknown group_id');
+      const max = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM categories WHERE group_id = ?').get(g.id).m;
+      db.prepare('UPDATE categories SET group_id = ?, sort_order = ? WHERE id = ?').run(g.id, max + 1, id);
+    }
     if (body.target_cents !== undefined || body.target_type !== undefined || body.target_date !== undefined) {
       const current = db.prepare('SELECT target_cents, target_type, target_date FROM categories WHERE id = ?').get(id);
       const target = parseTarget({
@@ -152,6 +212,49 @@ function createApp({ dbPath = ':memory:' } = {}) {
     if (cat.payment_account_id) throw httpError(400, 'credit card payment categories are managed automatically — delete the account instead');
     db.prepare('UPDATE transactions SET category_id = NULL WHERE category_id = ?').run(id);
     db.prepare('DELETE FROM categories WHERE id = ?').run(id);
+    return { ok: true };
+  });
+
+  // Reorder categories within a group: body.ids is the full ordered id list.
+  route('POST', '/api/categories/reorder', (req, p, q, body) => {
+    if (!Array.isArray(body.ids)) throw httpError(400, 'ids must be an array');
+    let order = 0;
+    for (const id of body.ids) {
+      db.prepare('UPDATE categories SET sort_order = ? WHERE id = ? AND is_income = 0').run(order++, Number(id));
+    }
+    return { ok: true };
+  });
+
+  // Auto-categorization rules (learned payee -> category). Fully user-manageable.
+  route('GET', '/api/payee-rules', () => ({
+    rules: db.prepare(`
+      SELECT r.payee_norm, r.category_id, c.name AS category_name, r.updated_at
+      FROM payee_rules r JOIN categories c ON c.id = r.category_id
+      ORDER BY r.payee_norm
+    `).all(),
+  }));
+
+  route('PUT', '/api/payee-rules/:payee', (req, p, q, body) => {
+    const norm = String(p.payee).trim().toLowerCase();
+    if (!norm) throw httpError(400, 'payee is required');
+    const cat = db.prepare('SELECT id FROM categories WHERE id = ? AND is_income = 0 AND payment_account_id IS NULL').get(Number(body.category_id));
+    if (!cat) throw httpError(400, 'unknown category_id');
+    db.prepare(`
+      INSERT INTO payee_rules (payee_norm, category_id, updated_at) VALUES (?, ?, datetime('now'))
+      ON CONFLICT (payee_norm) DO UPDATE SET category_id = excluded.category_id, updated_at = datetime('now')
+    `).run(norm, cat.id);
+    return { ok: true };
+  });
+
+  route('DELETE', '/api/payee-rules/:payee', (req, p) => {
+    const r = db.prepare('DELETE FROM payee_rules WHERE payee_norm = ?').run(String(p.payee).trim().toLowerCase());
+    if (r.changes === 0) throw httpError(404, 'rule not found');
+    return { ok: true };
+  });
+
+  // Danger zone: wipe all user data back to a fresh install.
+  route('POST', '/api/reset', (req, p, q, body) => {
+    resetData(db, { keepStarterCategories: body.keep_starter_categories !== false });
     return { ok: true };
   });
 

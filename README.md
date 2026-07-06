@@ -10,7 +10,29 @@ No cloud, no accounts, no bank credentials. Your data is a single SQLite file
 
 See [PLAN.md](PLAN.md) for the research summary and design.
 
+A fresh install ships **empty** — no accounts, no transactions — with only a set
+of starter category groups you can rename, reorder, or delete. Everything in
+Munney is editable, so you can shape it into your own financial OS.
+
 ## Quick start
+
+### Docker (deployable)
+
+```bash
+docker compose up -d --build      # → http://localhost:4321
+```
+
+Your data lives in the `munney-data` named volume and survives restarts and
+rebuilds. Stop with `docker compose down` (add `-v` to also wipe the database).
+
+Or build and run the image directly:
+
+```bash
+docker build -t munney .
+docker run -d -p 4321:4321 -v munney-data:/app/data munney
+```
+
+### Local (Node ≥ 22)
 
 ```bash
 npm start                # → http://localhost:4321
@@ -62,8 +84,23 @@ npm run seed && npm start
 | `npm test` | Unit + API integration tests (`node:test`, in-memory SQLite) |
 | `npm run test:e2e` | Browser end-to-end smoke test (Playwright + Chromium) |
 
-Environment: `PORT` (default 4321), `MUNNEY_DB` (default `data/munney.db`),
-`CHROMIUM_PATH` for the E2E test.
+Environment: `PORT` (default 4321), `HOST` (default `0.0.0.0`; set `127.0.0.1`
+for local-only), `MUNNEY_DB` (default `data/munney.db`), `CHROMIUM_PATH` for the
+E2E test.
+
+## Make it yours — everything is editable
+
+Munney is built to be reshaped into your own financial OS. From the UI you can:
+
+- **Accounts** — create, rename, change type/on-budget, close, or delete.
+- **Category groups** — create, rename, reorder, delete.
+- **Categories** — create, rename, move between groups, set monthly/by-date
+  targets, hide, reorder, delete.
+- **Transactions** — create, edit, delete, transfer, and CSV-import.
+- **Auto-categorization rules** — view, re-point, or delete learned payee rules
+  on the **Settings** page.
+- **Reset** — wipe everything back to a fresh install (optionally keeping the
+  starter categories) from **Settings → Reset all data**.
 
 ## Layout
 
