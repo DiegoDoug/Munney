@@ -543,3 +543,11 @@ svg .axis { stroke: var(--baseline); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* --- CRUD management affordances --- */
+.group-row .row-actions { margin-left: 8px; vertical-align: middle; }
+.icon-btn.mini { font-size: 13px; line-height: 1; }
+.danger-zone { border-color: var(--danger, #d9534f); }
+.danger-zone h2 { color: var(--danger, #d9534f); }
+.card h2 { font-size: 15px; margin: 0 0 4px; }
+.card + .card { margin-top: 18px; }

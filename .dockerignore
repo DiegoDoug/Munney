@@ -1,0 +1,8 @@
+.git
+node_modules
+data
+*.db
+test
+PLAN.md
+npm-debug.log
+.DS_Store

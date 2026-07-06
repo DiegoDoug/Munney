@@ -112,13 +112,14 @@ function ensurePaymentCategory(db, accountId, accountName) {
   return r.lastInsertRowid;
 }
 
-function seedSystemRows(db) {
+function seedSystemRows(db, { keepStarterCategories = true } = {}) {
   const hasSystem = db.prepare('SELECT id FROM category_groups WHERE is_system = 1').get();
   if (!hasSystem) {
     db.prepare("INSERT INTO category_groups (name, sort_order, is_system) VALUES ('Internal', -1, 1)").run();
     const gid = db.prepare('SELECT id FROM category_groups WHERE is_system = 1').get().id;
     db.prepare("INSERT INTO categories (group_id, name, is_income, hidden) VALUES (?, 'Inflow: Ready to Assign', 1, 0)").run(gid);
   }
+  if (!keepStarterCategories) return;
   const userGroups = db.prepare('SELECT COUNT(*) AS n FROM category_groups WHERE is_system = 0').get();
   if (userGroups.n === 0) {
     let gSort = 0;
@@ -137,4 +138,21 @@ function incomeCategoryId(db) {
   return db.prepare('SELECT id FROM categories WHERE is_income = 1').get().id;
 }
 
-module.exports = { open, incomeCategoryId, ensurePaymentCategory };
+// Wipe every user-owned row and rebuild the starter scaffold, returning the
+// database to the state a brand-new install ships with. Backs POST /api/reset
+// so a user can clear the app and build their own financial OS from scratch.
+function resetData(db, { keepStarterCategories = true } = {}) {
+  db.exec(`
+    DELETE FROM transactions;
+    DELETE FROM budget_allocations;
+    DELETE FROM payee_rules;
+    DELETE FROM categories;
+    DELETE FROM category_groups;
+    DELETE FROM accounts;
+  `);
+  // Reset autoincrement counters so ids start fresh (best-effort).
+  try { db.exec("DELETE FROM sqlite_sequence"); } catch {}
+  seedSystemRows(db, { keepStarterCategories });
+}
+
+module.exports = { open, incomeCategoryId, ensurePaymentCategory, resetData };
