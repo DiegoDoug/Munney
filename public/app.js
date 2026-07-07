@@ -894,12 +894,11 @@ function modalImport(defaultAccountId) {
         `<option value="${a.id}" ${defaultAccountId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
     <div class="form-row"><label>File</label><input type="file" id="m-file" accept=".csv,.md,.markdown,.txt,text/csv,text/markdown"></div>
     <div class="form-row"><label>…or paste CSV / Markdown</label>
-      <textarea id="m-csv" rows="8" placeholder="Date,Description,Amount&#10;2026-06-01,Kroger,-45.67&#10;&#10;— or a Markdown table —&#10;| Date | Description | Amount |&#10;|------|-------------|--------|&#10;| 2026-06-01 | Kroger | -45.67 |"></textarea></div>
-    <p class="hint-text">A <strong>mandatory AI auditor</strong> (DeepSeek) verifies every parsed transaction faithfully matches your file before anything is saved. Needs a header row with date, payee/description, and amount (or debit/credit) columns. Duplicates are skipped; known payees are auto-categorized.</p>
+      <textarea id="m-csv" rows="8" placeholder="Date,Description,Amount&#10;2026-06-01,Kroger,-45.67&#10;&#10;— or a Markdown table, or even free-form notes —&#10;| Date | Description | Amount |&#10;|------|-------------|--------|&#10;| 2026-06-01 | Kroger | -45.67 |"></textarea></div>
     <div id="m-audit"></div>
     <div class="form-actions">
       <button class="btn" id="m-cancel">Cancel</button>
-      <button class="btn primary" id="m-save">Verify &amp; Import</button>
+      <button class="btn primary" id="m-save">Import</button>
     </div>`);
   m.querySelector('#m-cancel').onclick = closeModal;
   m.querySelector('#m-file').onchange = async e => {
@@ -907,28 +906,22 @@ function modalImport(defaultAccountId) {
     if (f) m.querySelector('#m-csv').value = await f.text();
   };
   const auditBox = m.querySelector('#m-audit');
-  const renderIssues = (v) => {
-    if (!v || !Array.isArray(v.issues) || !v.issues.length) return '';
-    return `<ul class="audit-issues">${v.issues.map(i =>
-      `<li><strong>${esc(i.field || 'issue')}</strong>${i.index != null ? ` (row ${i.index + 1})` : ''}: ${esc(i.detail || '')}</li>`).join('')}</ul>`;
-  };
   m.querySelector('#m-save').onclick = async () => {
     const content = m.querySelector('#m-csv').value.trim();
     if (!content) return toast('Choose a file or paste CSV / Markdown', 'error');
     const btn = m.querySelector('#m-save');
-    btn.disabled = true; btn.textContent = 'Auditing…';
-    auditBox.innerHTML = `<div class="audit-note">🔍 The AI auditor is checking your transactions against the file…</div>`;
+    btn.disabled = true; btn.textContent = 'Analyzing…';
+    auditBox.innerHTML = `<div class="audit-note">🔍 The AI is reading your file and finding transactions…</div>`;
     try {
       const r = await api('POST', '/api/transactions/import', {
         account_id: Number(m.querySelector('#m-acct').value), content,
       });
       closeModal(); render(); refreshAccounts();
-      toast(`✓ Verified by ${r.verification?.model || 'AI'} · imported ${r.imported} · skipped ${r.skipped_duplicates} duplicates · auto-categorized ${r.auto_categorized}`, 'success');
+      toast(`✓ Imported ${r.imported} · skipped ${r.skipped_duplicates} duplicates · auto-categorized ${r.auto_categorized}`, 'success');
     } catch (e) {
-      btn.disabled = false; btn.textContent = 'Verify & Import';
-      const v = e.details?.verification;
-      auditBox.innerHTML = `<div class="audit-fail">✗ ${esc(e.message)}${renderIssues(v)}${
-        v?.notes ? `<div class="audit-note">${esc(v.notes)}</div>` : ''}</div>`;
+      btn.disabled = false; btn.textContent = 'Import';
+      auditBox.innerHTML = `<div class="audit-fail">✗ ${esc(e.message)}${
+        e.details?.notes ? `<div class="audit-note">${esc(e.details.notes)}</div>` : ''}</div>`;
       toast(e.message, 'error');
     }
   };
