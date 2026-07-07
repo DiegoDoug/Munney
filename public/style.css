@@ -461,6 +461,17 @@ svg .axis { stroke: var(--baseline); }
 .inline-fields > * { flex: 1; }
 .hint-text { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 0 0 4px; }
 
+/* ---------- AI import auditor feedback ---------- */
+#m-audit:empty { display: none; }
+.audit-note, .audit-ok, .audit-fail { font-size: 13px; line-height: 1.5; border-radius: 8px;
+  padding: 10px 12px; margin: 4px 0 8px; }
+.audit-note { color: var(--muted); background: var(--accent-soft); }
+.audit-ok { color: var(--good); background: var(--good-soft); border: 1px solid color-mix(in srgb, var(--good) 30%, transparent); }
+.audit-fail { color: var(--bad); background: var(--bad-soft); border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent); }
+.audit-fail .audit-note { background: transparent; color: var(--muted); padding: 6px 0 0; }
+.audit-issues { margin: 6px 0 0; padding-left: 18px; }
+.audit-issues li { margin: 2px 0; }
+
 /* ---------- states: loading / empty / error ---------- */
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center;
   color: var(--muted); padding: 40px 20px; gap: 6px; }

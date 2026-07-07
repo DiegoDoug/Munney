@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test test/budget.test.js test/recurring.test.js test/categorize.test.js test/creditcard.test.js test/goals-aom.test.js test/api.test.js",
+    "test": "node --test test/budget.test.js test/recurring.test.js test/categorize.test.js test/creditcard.test.js test/goals-aom.test.js test/api.test.js test/import-agent.test.js",
     "test:e2e": "node --test test/e2e.test.js",
     "seed": "node scripts/seed.js"
   },

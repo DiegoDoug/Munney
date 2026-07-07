@@ -11,7 +11,11 @@ const EXECUTABLE = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium';
 let server, browser, page, base;
 
 before(async () => {
-  server = createApp({ dbPath: ':memory:' });
+  // Stub the mandatory import auditor so the smoke test stays offline/deterministic.
+  server = createApp({ dbPath: ':memory:', verifyImport: async ({ candidates }) => ({
+    verified: true, expected_count: candidates.length, parsed_count: candidates.length,
+    issues: [], notes: 'stubbed for e2e', model: 'stub',
+  }) });
   await new Promise(res => server.listen(0, '127.0.0.1', res));
   base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ executablePath: EXECUTABLE });
