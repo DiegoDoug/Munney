@@ -12,6 +12,11 @@ services:
       PORT: "4321"
       HOST: "0.0.0.0"
       MUNNEY_DB: "/app/data/munney.db"
+      # Import auditor. Compose reads these from the host .env (git-ignored),
+      # so the DeepSeek key reaches the container without being baked into the image.
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      DEEPSEEK_MODEL: "${DEEPSEEK_MODEL:-deepseek-chat}"
+      DEEPSEEK_BASE_URL: "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
     volumes:
       # Named volume keeps your SQLite database across restarts and rebuilds.
       - munney-data:/app/data

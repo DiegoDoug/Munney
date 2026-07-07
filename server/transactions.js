@@ -8,9 +8,10 @@ function assertDate(date) {
   return date;
 }
 
-function httpError(status, message) {
+function httpError(status, message, data) {
   const e = new Error(message);
   e.status = status;
+  if (data !== undefined) e.data = data;
   return e;
 }
 
@@ -145,7 +146,7 @@ function listTransactions(db, q) {
   return { transactions: rows, total };
 }
 
-// --- CSV import ---------------------------------------------------------
+// --- File import (CSV + Markdown) ---------------------------------------
 // Accepts common bank export shapes. Header row required. Recognized columns
 // (case-insensitive): date, payee/description/merchant, amount, or debit+credit,
 // memo/notes, category.
@@ -196,13 +197,50 @@ function parseDateToISO(str) {
   return null;
 }
 
-function importCSV(db, accountId, csvText) {
-  const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId);
-  if (!account) throw httpError(400, 'unknown account_id');
-  const rows = parseCSV(csvText);
-  if (rows.length < 2) throw httpError(400, 'CSV needs a header row and at least one data row');
+// Parse a Markdown file into the same row-of-cells shape parseCSV produces, so
+// the rest of the importer treats CSV and Markdown identically. Supports GitHub
+// pipe tables (the natural way to write a statement in Markdown):
+//   | Date       | Description | Amount  |
+//   |------------|-------------|---------|
+//   | 2026-06-01 | Kroger      | -45.67  |
+// Non-table prose above/below the table is ignored.
+function parseMarkdown(text) {
+  const lines = String(text).split(/\r?\n/);
+  const isTableRow = l => /^\s*\|.*\|\s*$/.test(l);
+  const isSeparator = l => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l) && /-/.test(l);
+  const splitRow = l => {
+    let s = l.trim();
+    if (s.startsWith('|')) s = s.slice(1);
+    if (s.endsWith('|')) s = s.slice(0, -1);
+    // Split on unescaped pipes, then unescape \| .
+    return s.split(/(?<!\\)\|/).map(c => c.replace(/\\\|/g, '|').trim());
+  };
 
-  const header = rows[0].map(h => h.trim().toLowerCase());
+  const rows = [];
+  for (const line of lines) {
+    if (!isTableRow(line) || isSeparator(line)) continue;
+    rows.push(splitRow(line));
+  }
+  return rows;
+}
+
+function detectFormat(content, hint) {
+  if (hint === 'csv' || hint === 'md') return hint;
+  const s = String(content);
+  // A Markdown pipe table has header + separator rows made of pipes and dashes.
+  if (/^\s*\|.*\|\s*$/m.test(s) && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/m.test(s)) return 'md';
+  return 'csv';
+}
+
+// Turn parsed rows into the exact transactions we intend to create — WITHOUT
+// touching the database's transaction table. Returns { candidates, errors }.
+// Each candidate carries everything needed both to show the AI auditor and to
+// insert on approval (date, payee, signed amount_cents, memo, resolved category,
+// dedupe hash, and source row number).
+function buildCandidates(db, accountId, rows) {
+  if (rows.length < 2) throw httpError(400, 'file needs a header row and at least one data row');
+
+  const header = rows[0].map(h => String(h).trim().toLowerCase());
   const col = (...names) => header.findIndex(h => names.includes(h));
   const iDate = col('date', 'transaction date', 'posted date');
   const iPayee = col('payee', 'description', 'merchant', 'name');
@@ -212,7 +250,7 @@ function importCSV(db, accountId, csvText) {
   const iMemo = col('memo', 'notes', 'note');
   const iCategory = col('category');
   if (iDate < 0 || iPayee < 0 || (iAmount < 0 && iDebit < 0 && iCredit < 0)) {
-    throw httpError(400, 'CSV must have date, payee/description, and amount (or debit/credit) columns');
+    throw httpError(400, 'file must have date, payee/description, and amount (or debit/credit) columns');
   }
 
   const incomeId = incomeCategoryId(db);
@@ -221,14 +259,8 @@ function importCSV(db, accountId, csvText) {
       .map(c => [c.name.toLowerCase(), c.id])
   );
 
-  let imported = 0, skipped = 0, autoCategorized = 0;
+  const candidates = [];
   const errors = [];
-  const ins = db.prepare(`
-    INSERT INTO transactions (account_id, date, payee, category_id, amount_cents, memo, import_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const dupCheck = db.prepare('SELECT id FROM transactions WHERE import_hash = ?');
-
   for (let r = 1; r < rows.length; r++) {
     const cells = rows[r];
     const date = parseDateToISO(cells[iDate]);
@@ -245,11 +277,7 @@ function importCSV(db, accountId, csvText) {
     }
     if (!date || amount === null) { errors.push(`row ${r + 1}: bad date or amount`); continue; }
 
-    const hash = crypto.createHash('sha256')
-      .update(`${accountId}|${date}|${payee}|${amount}`).digest('hex');
-    if (dupCheck.get(hash)) { skipped++; continue; }
-
-    let categoryId = null;
+    let categoryId = null, autoCategorized = false;
     if (iCategory >= 0 && cells[iCategory]) {
       const name = String(cells[iCategory]).trim().toLowerCase();
       if (name === 'income') categoryId = incomeId;
@@ -258,16 +286,78 @@ function importCSV(db, accountId, csvText) {
     if (!categoryId && amount > 0) categoryId = incomeId; // inflows default to income
     if (!categoryId && payee) {
       categoryId = suggestCategory(db, payee);
-      if (categoryId) autoCategorized++;
+      if (categoryId) autoCategorized = true;
     }
     const memo = iMemo >= 0 ? String(cells[iMemo] || '').trim() : '';
-    ins.run(accountId, date, payee, categoryId, amount, memo, hash);
-    imported++;
+    const hash = crypto.createHash('sha256')
+      .update(`${accountId}|${date}|${payee}|${amount}`).digest('hex');
+    candidates.push({ row: r + 1, date, payee, amount_cents: amount, memo, category_id: categoryId, autoCategorized, hash });
   }
-  return { imported, skipped_duplicates: skipped, auto_categorized: autoCategorized, errors };
+  return { candidates, errors };
+}
+
+// Write approved candidates, skipping import-hash duplicates.
+function insertCandidates(db, accountId, candidates) {
+  let imported = 0, skipped = 0, autoCategorized = 0;
+  const ins = db.prepare(`
+    INSERT INTO transactions (account_id, date, payee, category_id, amount_cents, memo, import_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const dupCheck = db.prepare('SELECT id FROM transactions WHERE import_hash = ?');
+  for (const c of candidates) {
+    if (dupCheck.get(c.hash)) { skipped++; continue; }
+    ins.run(accountId, c.date, c.payee, c.category_id, c.amount_cents, c.memo, c.hash);
+    imported++;
+    if (c.autoCategorized) autoCategorized++;
+  }
+  return { imported, skipped_duplicates: skipped, auto_categorized: autoCategorized };
+}
+
+// Mandatory-AI-gated import for CSV or Markdown. Parses the file into the exact
+// transactions it would create, hands the raw file + those transactions to the
+// AI auditor (verifyImport), and only writes them if the auditor confirms they
+// faithfully match the file. A failed or unavailable auditor aborts the import
+// so nothing is written on unverified data.
+async function importFile(db, accountId, content, opts = {}) {
+  const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId);
+  if (!account) throw httpError(400, 'unknown account_id');
+  if (!content || !String(content).trim()) throw httpError(400, 'file is empty');
+  if (typeof opts.verifyImport !== 'function') {
+    throw httpError(503, 'AI import auditor is not configured; import is disabled without it');
+  }
+
+  const format = detectFormat(content, opts.format);
+  const rows = format === 'md' ? parseMarkdown(content) : parseCSV(content);
+  const { candidates, errors } = buildCandidates(db, accountId, rows);
+  if (candidates.length === 0) {
+    throw httpError(400, 'no valid transactions found in file', { errors });
+  }
+
+  // --- mandatory verification gate ---
+  const verification = await opts.verifyImport({ rawContent: String(content), format, candidates });
+  if (!verification || verification.verified !== true) {
+    throw httpError(422, 'AI auditor could not verify the transactions match the file — nothing was imported', {
+      verification: verification || null,
+      parse_errors: errors,
+    });
+  }
+
+  const result = insertCandidates(db, accountId, candidates);
+  return { format, ...result, errors, verification };
+}
+
+// Lower-level, synchronous parse+insert with NO AI gate. Not exposed through
+// the HTTP API (which always routes CSV/Markdown through the AI-audited
+// importFile); kept for the parser/dedupe unit tests and programmatic seeding.
+function importCSV(db, accountId, csvText) {
+  const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId);
+  if (!account) throw httpError(400, 'unknown account_id');
+  const { candidates, errors } = buildCandidates(db, accountId, parseCSV(csvText));
+  return { ...insertCandidates(db, accountId, candidates), errors };
 }
 
 module.exports = {
   createTransaction, updateTransaction, deleteTransaction, getTransaction,
-  listTransactions, importCSV, parseCSV, parseAmountToCents, parseDateToISO, httpError,
+  listTransactions, importFile, importCSV, buildCandidates, insertCandidates,
+  parseCSV, parseMarkdown, detectFormat, parseAmountToCents, parseDateToISO, httpError,
 };
