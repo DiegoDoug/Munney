@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const { createApp } = require('../server/app');
 const txmod = require('../server/transactions');
 
-// --- unit: Markdown + format detection -----------------------------------
+// --- unit: Markdown + format detection (still used by legacy importCSV path) --
 test('parseMarkdown reads a GitHub pipe table, ignoring the separator row', () => {
   const md = [
     '# June statement',
@@ -27,16 +27,19 @@ test('detectFormat distinguishes Markdown tables from CSV', () => {
   assert.equal(txmod.detectFormat('Date,Description,Amount\n2026-06-01,Kroger,-45.67'), 'csv');
 });
 
-// --- integration: the mandatory AI gate -----------------------------------
-// A stub verifier stands in for DeepSeek so tests are deterministic & offline.
-let server, base, verdict, seenPayload;
+// --- integration: the mandatory AI analysis gate --------------------------
+// A stub analyst stands in for DeepSeek so tests are deterministic & offline.
+// Unlike the old column-matching gate, the AI is handed the RAW file and is
+// solely responsible for extracting the transaction list — there is no local
+// header/column requirement in this path.
+let server, base, extraction, seenPayload;
 
-function stubVerifier() {
-  return async (payload) => { seenPayload = payload; return verdict(payload); };
+function stubAnalyzer() {
+  return async (payload) => { seenPayload = payload; return extraction(payload); };
 }
 
 before(async () => {
-  server = createApp({ dbPath: ':memory:', verifyImport: stubVerifier() });
+  server = createApp({ dbPath: ':memory:', analyzeImport: stubAnalyzer() });
   await new Promise(res => server.listen(0, '127.0.0.1', res));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -56,37 +59,61 @@ async function makeAccount() {
   return r.json.account.id;
 }
 
-test('import is refused (nothing written) when the AI auditor does not verify', async () => {
+test('import is refused (nothing written) when the AI analyst finds no transactions', async () => {
   const accountId = await makeAccount();
-  verdict = () => ({ verified: false, issues: [{ index: 0, field: 'amount', detail: 'sign flipped' }], notes: 'mismatch' });
+  extraction = () => ({ transactions: [], notes: 'this file has no transaction-like content' });
   const r = await api('POST', '/api/transactions/import', {
     account_id: accountId,
-    content: 'Date,Description,Amount\n2026-06-01,Kroger,-45.67',
+    content: 'just some prose with no financial data at all',
   });
-  assert.equal(r.status, 422);
-  assert.match(r.json.error, /could not verify/i);
-  assert.equal(r.json.details.verification.issues[0].field, 'amount');
+  assert.equal(r.status, 400);
+  assert.match(r.json.error, /no transactions/i);
   const list = await api('GET', `/api/transactions?account_id=${accountId}`);
-  assert.equal(list.json.total, 0, 'no transactions should be written on a failed audit');
+  assert.equal(list.json.total, 0, 'nothing should be written when the AI finds nothing');
 });
 
-test('import writes transactions only after the AI auditor verifies them', async () => {
+test('import is refused when the AI analyst is unreachable/unconfigured', async () => {
+  const noAiServer = createApp({ dbPath: ':memory:' }); // no analyzeImport, no DEEPSEEK_API_KEY in test env
+  await new Promise(res => noAiServer.listen(0, '127.0.0.1', res));
+  const noAiBase = `http://127.0.0.1:${noAiServer.address().port}`;
+  const acct = await (await fetch(`${noAiBase}/api/accounts`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Checking', type: 'checking' }),
+  }).then(r => r.json())).account.id;
+  const res = await fetch(`${noAiBase}/api/transactions/import`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: acct, content: 'Date,Description,Amount\n2026-06-01,Kroger,-45.67' }),
+  });
+  assert.equal(res.status, 503);
+  noAiServer.close();
+});
+
+test('import writes transactions the AI extracts directly from the raw file, no column schema required', async () => {
   const accountId = await makeAccount();
-  verdict = (p) => ({ verified: true, expected_count: p.candidates.length, issues: [], notes: 'looks good' });
-  const csv = 'Date,Description,Amount\n2026-06-01,Kroger,-45.67\n2026-06-03,Paycheck,2000.00';
-  const r = await api('POST', '/api/transactions/import', { account_id: accountId, content: csv });
+  extraction = () => ({
+    transactions: [
+      { date: '2026-06-01', payee: 'Kroger', amount_cents: -4567, memo: '' },
+      { date: '2026-06-03', payee: 'Paycheck', amount_cents: 200000, memo: '' },
+    ],
+    notes: 'found 2 transactions',
+  });
+  // Deliberately NOT a recognized column layout — the AI is responsible for
+  // reading this itself, not a local header-matching parser.
+  const freeform = 'June activity: spent $45.67 at Kroger on the 1st; got paid $2000 on the 3rd.';
+  const r = await api('POST', '/api/transactions/import', { account_id: accountId, content: freeform });
   assert.equal(r.status, 200);
   assert.equal(r.json.imported, 2);
-  assert.equal(r.json.verification.verified, true);
-  assert.equal(seenPayload.candidates.length, 2, 'auditor is handed the parsed candidates');
-  assert.equal(seenPayload.candidates[0].amount_cents, -4567);
+  assert.equal(seenPayload.rawContent, freeform, 'the AI is handed the raw file verbatim');
   const list = await api('GET', `/api/transactions?account_id=${accountId}`);
   assert.equal(list.json.total, 2);
 });
 
-test('Markdown import flows through the same audited pipeline', async () => {
+test('Markdown import flows through the same AI-analyzed pipeline', async () => {
   const accountId = await makeAccount();
-  verdict = () => ({ verified: true, issues: [], notes: 'ok' });
+  extraction = () => ({
+    transactions: [{ date: '2026-06-04', payee: 'Coffee Shop', amount_cents: -525, memo: '' }],
+    notes: 'ok',
+  });
   const md = [
     '| Date | Description | Amount |',
     '|------|-------------|--------|',
@@ -96,12 +123,26 @@ test('Markdown import flows through the same audited pipeline', async () => {
   assert.equal(r.status, 200);
   assert.equal(r.json.format, 'md');
   assert.equal(r.json.imported, 1);
-  assert.equal(seenPayload.candidates[0].date, '2026-06-04'); // MM/DD/YYYY normalized
+});
+
+test('invalid entries from the AI are skipped with an error, valid ones still import', async () => {
+  const accountId = await makeAccount();
+  extraction = () => ({
+    transactions: [
+      { date: 'not-a-date', payee: 'Bad Row', amount_cents: -100, memo: '' },
+      { date: '2026-06-05', payee: 'Gas', amount_cents: -3000, memo: '' },
+    ],
+    notes: 'one row was ambiguous',
+  });
+  const r = await api('POST', '/api/transactions/import', { account_id: accountId, content: 'whatever' });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.imported, 1);
+  assert.equal(r.json.errors.length, 1);
 });
 
 test('legacy { csv } field still works', async () => {
   const accountId = await makeAccount();
-  verdict = () => ({ verified: true, issues: [], notes: 'ok' });
+  extraction = () => ({ transactions: [{ date: '2026-06-05', payee: 'Gas', amount_cents: -3000, memo: '' }], notes: 'ok' });
   const r = await api('POST', '/api/transactions/import', {
     account_id: accountId,
     csv: 'Date,Description,Amount\n2026-06-05,Gas,-30.00',

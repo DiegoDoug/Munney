@@ -20,13 +20,13 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-function createApp({ dbPath = ':memory:', verifyImport } = {}) {
+function createApp({ dbPath = ':memory:', analyzeImport } = {}) {
   const db = open(dbPath);
   const publicDir = path.join(__dirname, '..', 'public');
-  // The mandatory AI import auditor. Defaults to the real DeepSeek verifier;
+  // The mandatory AI import analyst. Defaults to the real DeepSeek analyst;
   // tests inject a stub. When no key is configured this stays undefined and the
-  // import endpoint refuses to run rather than importing unverified data.
-  const importVerifier = verifyImport ?? (agent.isConfigured() ? agent.verifyImport : undefined);
+  // import endpoint refuses to run rather than importing unanalyzed data.
+  const importAnalyzer = analyzeImport ?? (agent.isConfigured() ? agent.analyzeImport : undefined);
 
   // --- route table: [method, regex, handler(req, params, query, body)] ----
   const routes = [];
@@ -268,23 +268,23 @@ function createApp({ dbPath = ':memory:', verifyImport } = {}) {
   route('POST', '/api/transactions', (req, p, q, body) => ({ transaction: tx.createTransaction(db, body) }));
   route('PATCH', '/api/transactions/:id', (req, p, q, body) => ({ transaction: tx.updateTransaction(db, Number(p.id), body) }));
   route('DELETE', '/api/transactions/:id', (req, p) => { tx.deleteTransaction(db, Number(p.id)); return { ok: true }; });
-  // AI-audited CSV/Markdown import. Accepts { content } (or legacy { csv }),
-  // optional { format: 'csv'|'md' }. Every import is verified by the mandatory
-  // AI auditor before any transaction is written.
+  // AI-analyzed CSV/Markdown import. Accepts { content } (or legacy { csv }),
+  // optional { format: 'csv'|'md' }. The mandatory AI analyst reads the raw
+  // file itself and extracts the transactions before any are written.
   route('POST', '/api/transactions/import', async (req, p, q, body) => {
     const content = body.content ?? body.csv;
     if (!content) throw httpError(400, 'content is required (CSV or Markdown text)');
-    if (!importVerifier) {
-      throw httpError(503, 'AI import auditor is not configured: set DEEPSEEK_API_KEY in .env to enable importing');
+    if (!importAnalyzer) {
+      throw httpError(503, 'AI import analyst is not configured: set DEEPSEEK_API_KEY in .env to enable importing');
     }
     return tx.importFile(db, Number(body.account_id), content, {
       format: body.format,
-      verifyImport: importVerifier,
+      analyzeImport: importAnalyzer,
     });
   });
 
   // Whether AI-audited import is available (drives the UI's import affordance).
-  route('GET', '/api/import/status', () => ({ ai_available: Boolean(importVerifier), model: agent.config().model }));
+  route('GET', '/api/import/status', () => ({ ai_available: Boolean(importAnalyzer), model: agent.config().model }));
 
   // Budget
   route('GET', '/api/budget/:month', (req, p) => {

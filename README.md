@@ -70,21 +70,21 @@ npm run seed && npm start
 - **Reports**: spending by category, income vs. spending, net worth over time.
 
 **Getting money in**
-- Manual entry (with income/transfer support) and **AI-audited CSV / Markdown
-  import** with automatic duplicate detection — handles `Date,Description,Amount`
-  and `Date,Description,Debit,Credit` shapes, GitHub-style Markdown pipe tables,
-  `MM/DD/YYYY` or ISO dates, `$1,234.56` and `(12.34)` amount formats.
-- **Mandatory import auditor (DeepSeek)**: every imported file is parsed into the
-  exact transactions it would create, and a required AI agent verifies those
-  transactions faithfully match the file — right count, right dates, right signed
-  amounts, right payees — *before anything is written*. If the auditor finds a
-  missing row, an invented row, or a mismatched field, the import is refused and
-  the discrepancies are shown, so bad data never reaches your budget.
+- Manual entry (with income/transfer support) and **AI-analyzed CSV / Markdown
+  import** with automatic duplicate detection.
+- **Mandatory import analyst (DeepSeek)**: every imported file is read and
+  understood by a required AI agent — no fixed column schema needed. It finds
+  every real transaction (any shape: standard columns, unusual headers, even
+  free-form notes describing purchases), normalizes dates and signed amounts,
+  and creates them directly. Header rows, totals, and running-balance lines
+  are excluded automatically. If the file has no analyzable transactions, or
+  the AI can't be reached, the import is refused so bad data never reaches
+  your budget.
 
-### Enabling AI-audited import
+### Enabling AI-analyzed import
 
-The auditor needs a DeepSeek API key. It lives only in a local, git-ignored
-`.env` file (never in code, never committed):
+The import analyst needs a DeepSeek API key. It lives only in a local,
+git-ignored `.env` file (never in code, never committed):
 
 ```bash
 cp .env.example .env      # then paste your key into DEEPSEEK_API_KEY
@@ -92,8 +92,8 @@ cp .env.example .env      # then paste your key into DEEPSEEK_API_KEY
 
 Get a key at [platform.deepseek.com](https://platform.deepseek.com/). Without a
 configured key the import endpoint is disabled (it refuses rather than importing
-unverified data). If you run Munney in a sandboxed/remote environment with an
-outbound-egress allowlist, add `api.deepseek.com` to it so the auditor can be
+unanalyzed data). If you run Munney in a sandboxed/remote environment with an
+outbound-egress allowlist, add `api.deepseek.com` to it so the AI can be
 reached.
 
 ## Commands
@@ -107,7 +107,7 @@ reached.
 
 Environment: `PORT` (default 4321), `HOST` (default `0.0.0.0`; set `127.0.0.1`
 for local-only), `MUNNEY_DB` (default `data/munney.db`), `CHROMIUM_PATH` for the
-E2E test. Import auditor: `DEEPSEEK_API_KEY` (required for import; read from
+E2E test. Import analyst: `DEEPSEEK_API_KEY` (required for import; read from
 `.env`), `DEEPSEEK_MODEL` (default `deepseek-chat`), `DEEPSEEK_BASE_URL` (default
 `https://api.deepseek.com`).
 

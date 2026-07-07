@@ -147,9 +147,10 @@ function listTransactions(db, q) {
 }
 
 // --- File import (CSV + Markdown) ---------------------------------------
-// Accepts common bank export shapes. Header row required. Recognized columns
-// (case-insensitive): date, payee/description/merchant, amount, or debit+credit,
-// memo/notes, category.
+// The mandatory-AI path (importFile, below) hands the raw file to the AI
+// analyst, which reads and extracts transactions itself — no fixed column
+// schema required. parseCSV/parseMarkdown/buildCandidates below remain as a
+// local, non-AI fallback path (importCSV) used only for tests/seeding.
 function parseCSV(text) {
   const rows = [];
   let row = [], field = '', inQuotes = false;
@@ -232,11 +233,9 @@ function detectFormat(content, hint) {
   return 'csv';
 }
 
-// Turn parsed rows into the exact transactions we intend to create — WITHOUT
-// touching the database's transaction table. Returns { candidates, errors }.
-// Each candidate carries everything needed both to show the AI auditor and to
-// insert on approval (date, payee, signed amount_cents, memo, resolved category,
-// dedupe hash, and source row number).
+// Local, non-AI column-matching parser (legacy path, used only by importCSV
+// below for tests/seeding — the mandatory HTTP import path never calls this;
+// it hands the raw file to the AI analyst instead). Returns { candidates, errors }.
 function buildCandidates(db, accountId, rows) {
   if (rows.length < 2) throw httpError(400, 'file needs a header row and at least one data row');
 
@@ -313,37 +312,73 @@ function insertCandidates(db, accountId, candidates) {
   return { imported, skipped_duplicates: skipped, auto_categorized: autoCategorized };
 }
 
-// Mandatory-AI-gated import for CSV or Markdown. Parses the file into the exact
-// transactions it would create, hands the raw file + those transactions to the
-// AI auditor (verifyImport), and only writes them if the auditor confirms they
-// faithfully match the file. A failed or unavailable auditor aborts the import
-// so nothing is written on unverified data.
+// Turn the AI analyst's raw transaction output into insertable candidates:
+// validate/normalize each entry, resolve a category (AI-named category, else
+// income-for-inflows, else learned auto-categorization), and compute the
+// dedupe hash. Invalid entries (bad date/amount) are collected as errors
+// rather than aborting the whole import.
+function normalizeExtracted(db, accountId, transactions) {
+  const incomeId = incomeCategoryId(db);
+  const catByName = new Map(
+    db.prepare('SELECT id, name FROM categories WHERE is_income = 0 AND payment_account_id IS NULL').all()
+      .map(c => [c.name.toLowerCase(), c.id])
+  );
+
+  const candidates = [];
+  const errors = [];
+  transactions.forEach((t, i) => {
+    const date = parseDateToISO(t?.date) || (/^\d{4}-\d{2}-\d{2}$/.test(String(t?.date)) ? t.date : null);
+    const payee = String(t?.payee ?? '').trim();
+    const amount = Math.trunc(Number(t?.amount_cents));
+    if (!date || !Number.isFinite(amount)) { errors.push(`transaction ${i + 1}: bad date or amount`); return; }
+
+    let categoryId = null, autoCategorized = false;
+    const catName = String(t?.category ?? '').trim().toLowerCase();
+    if (catName === 'income') categoryId = incomeId;
+    else if (catName) categoryId = catByName.get(catName) ?? null;
+    if (!categoryId && amount > 0) categoryId = incomeId; // inflows default to income
+    if (!categoryId && payee) {
+      categoryId = suggestCategory(db, payee);
+      if (categoryId) autoCategorized = true;
+    }
+    const memo = String(t?.memo ?? '').trim();
+    const hash = crypto.createHash('sha256')
+      .update(`${accountId}|${date}|${payee}|${amount}`).digest('hex');
+    candidates.push({ date, payee, amount_cents: amount, memo, category_id: categoryId, autoCategorized, hash });
+  });
+  return { candidates, errors };
+}
+
+// Mandatory-AI-analyzed import for CSV or Markdown. The AI reads the raw file
+// itself and returns the transactions it found — there is no rigid local
+// column-matching gate. A missing/unreachable/unconfigured analyst aborts the
+// import so nothing is ever written from unanalyzed data.
 async function importFile(db, accountId, content, opts = {}) {
   const account = db.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId);
   if (!account) throw httpError(400, 'unknown account_id');
   if (!content || !String(content).trim()) throw httpError(400, 'file is empty');
-  if (typeof opts.verifyImport !== 'function') {
-    throw httpError(503, 'AI import auditor is not configured; import is disabled without it');
+  if (typeof opts.analyzeImport !== 'function') {
+    throw httpError(503, 'AI import analyst is not configured; import is disabled without it');
   }
 
   const format = detectFormat(content, opts.format);
-  const rows = format === 'md' ? parseMarkdown(content) : parseCSV(content);
-  const { candidates, errors } = buildCandidates(db, accountId, rows);
-  if (candidates.length === 0) {
-    throw httpError(400, 'no valid transactions found in file', { errors });
+
+  // --- mandatory AI analysis: the AI reads and parses the file itself ---
+  const analysis = await opts.analyzeImport({ rawContent: String(content), format });
+  if (!analysis || !Array.isArray(analysis.transactions)) {
+    throw httpError(502, 'AI analyst did not return a usable transaction list — nothing was imported');
+  }
+  if (analysis.transactions.length === 0) {
+    throw httpError(400, 'AI analyst found no transactions in the file', { notes: analysis.notes || '' });
   }
 
-  // --- mandatory verification gate ---
-  const verification = await opts.verifyImport({ rawContent: String(content), format, candidates });
-  if (!verification || verification.verified !== true) {
-    throw httpError(422, 'AI auditor could not verify the transactions match the file — nothing was imported', {
-      verification: verification || null,
-      parse_errors: errors,
-    });
+  const { candidates, errors } = normalizeExtracted(db, accountId, analysis.transactions);
+  if (candidates.length === 0) {
+    throw httpError(400, 'AI analyst found transactions but none had a valid date and amount', { errors, notes: analysis.notes || '' });
   }
 
   const result = insertCandidates(db, accountId, candidates);
-  return { format, ...result, errors, verification };
+  return { format, ...result, errors, notes: analysis.notes || '', model: analysis.model };
 }
 
 // Lower-level, synchronous parse+insert with NO AI gate. Not exposed through

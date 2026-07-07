@@ -1,7 +1,7 @@
 'use strict';
 const path = require('node:path');
 
-// Load secrets from .env (DeepSeek key for the mandatory import auditor) using
+// Load secrets from .env (DeepSeek key for the mandatory import analyst) using
 // Node's built-in loader — no dotenv dependency. Missing file is fine.
 try { process.loadEnvFile(path.join(__dirname, '..', '.env')); } catch { /* no .env — AI import stays disabled */ }
 
@@ -18,6 +18,6 @@ const server = createApp({ dbPath: DB_PATH });
 server.listen(PORT, HOST, () => {
   console.log(`Munney running at http://localhost:${PORT}  (db: ${DB_PATH}, host: ${HOST})`);
   console.log(agent.isConfigured()
-    ? `AI import auditor: enabled (${agent.config().model})`
-    : 'AI import auditor: DISABLED — set DEEPSEEK_API_KEY in .env to enable CSV/Markdown import');
+    ? `AI import analyst: enabled (${agent.config().model})`
+    : 'AI import analyst: DISABLED — set DEEPSEEK_API_KEY in .env to enable CSV/Markdown import');
 });

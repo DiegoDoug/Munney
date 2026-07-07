@@ -5,17 +5,23 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { chromium } = require('playwright-core');
 const { createApp } = require('../server/app');
+const { parseCSV } = require('../server/transactions');
 
 const EXECUTABLE = process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium';
 
 let server, browser, page, base;
 
 before(async () => {
-  // Stub the mandatory import auditor so the smoke test stays offline/deterministic.
-  server = createApp({ dbPath: ':memory:', verifyImport: async ({ candidates }) => ({
-    verified: true, expected_count: candidates.length, parsed_count: candidates.length,
-    issues: [], notes: 'stubbed for e2e', model: 'stub',
-  }) });
+  // Stub the mandatory AI import analyst so the smoke test stays offline/
+  // deterministic: it reads simple "Date,Description,Amount" CSV itself,
+  // mirroring what the real AI would extract from the same file.
+  server = createApp({ dbPath: ':memory:', analyzeImport: async ({ rawContent }) => {
+    const rows = parseCSV(rawContent);
+    const transactions = rows.slice(1).map(([date, payee, amount]) => ({
+      date, payee, amount_cents: Math.round(Number(amount) * 100), memo: '',
+    }));
+    return { transactions, notes: 'stubbed for e2e', model: 'stub' };
+  } });
   await new Promise(res => server.listen(0, '127.0.0.1', res));
   base = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ executablePath: EXECUTABLE });
